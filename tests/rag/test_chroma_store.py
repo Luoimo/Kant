@@ -157,7 +157,8 @@ class TestChunkToDocument:
         chunk = make_chunk()
         doc = ChromaStore._chunk_to_document(chunk)
         for key in ("chunk_id", "char_count", "source", "page_numbers",
-                    "chunk_index", "pdf_title", "pdf_author"):
+                    "chunk_index", "pdf_title", "pdf_author",
+                    "chapter_title", "section_title"):
             assert key in doc.metadata
 
     def test_chunk_id_in_metadata(self):

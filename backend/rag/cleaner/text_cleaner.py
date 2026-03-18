@@ -25,7 +25,11 @@ from unstructured.cleaners.core import (
     replace_unicode_quotes,
 )
 
-from backend.rag.extracter.pdf_extractor import PageContent, PDFContent
+from backend.rag.extracter.pdf_extractor import (
+    PDFContent,
+    PageContent,
+    build_page_section_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +84,15 @@ class CleanConfig:
 
 @dataclass
 class CleanedPage:
-    """单页清洗结果，携带原始页码信息。"""
+    """单页清洗结果，携带原始页码信息及书本章节（来自 PDF 目录）。"""
     page_number: int
     text: str
     blocks: list[dict]          # 清洗后的文本块（已过滤噪声块）
     width: float
     height: float
     source_page: PageContent    # 原始 PageContent 引用
+    chapter_title: str = ""     # 当前页所属章标题（TOC 层级 1）
+    section_title: str = ""     # 当前页所属节标题（TOC 最细层级）
 
 
 @dataclass
@@ -140,7 +146,27 @@ class TextCleaner:
 
     def clean_content(self, content: PDFContent) -> CleanedContent:
         """清洗整个 :class:`PDFContent`，返回 :class:`CleanedContent`。"""
-        cleaned_pages = [self.clean_page(p) for p in content.pages]
+        page_section_map = build_page_section_map(
+            content.toc, content.total_pages
+        )
+        cleaned_pages: list[CleanedPage] = []
+        for p in content.pages:
+            cp = self.clean_page(p)
+            chapter, section = page_section_map.get(
+                p.page_number, ("", "")
+            )
+            cleaned_pages.append(
+                CleanedPage(
+                    page_number=cp.page_number,
+                    text=cp.text,
+                    blocks=cp.blocks,
+                    width=cp.width,
+                    height=cp.height,
+                    source_page=cp.source_page,
+                    chapter_title=chapter,
+                    section_title=section,
+                )
+            )
         logger.debug(
             "TextCleaner: 完成 %s，共 %d 页",
             content.source, len(cleaned_pages),
@@ -156,15 +182,24 @@ class TextCleaner:
         """清洗单个 :class:`PageContent`，返回 :class:`CleanedPage`。"""
         cfg = self.config
 
-        # 1. 清洗文本块，过滤噪声
+        # 1. 清洗文本块，过滤噪声（会保留 extractor 写入的 is_heading / heading_text）
         cleaned_blocks = self._clean_blocks(page.blocks, page.height)
 
-        # 2. 从清洗后的文本块重建页面文本（比直接清洗 page.text 更精准）
-        block_texts = [b["text"] for b in cleaned_blocks if b["text"].strip()]
-        raw_text = "\n".join(block_texts) if block_texts else page.text
+        # 2. 对每块单独做管道清洗，再拼接为页面文本，便于为每块记录 start_offset/end_offset（供 chunker 推算 section_title）
+        for blk in cleaned_blocks:
+            blk["text"] = self._apply_pipeline(blk["text"])
 
-        # 3. 应用 unstructured + 自定义管道
-        text = self._apply_pipeline(raw_text)
+        # 3. 计算每块在页面文本中的起止偏移
+        cur = 0
+        for blk in cleaned_blocks:
+            t = (blk.get("text") or "").strip()
+            blk["start_offset"] = cur
+            if t:
+                cur += len(t) + 1  # 文本 + 换行
+            blk["end_offset"] = cur
+
+        block_texts = [b["text"].strip() for b in cleaned_blocks if b["text"].strip()]
+        text = "\n".join(block_texts) if block_texts else ""
 
         return CleanedPage(
             page_number=page.page_number,
@@ -173,6 +208,8 @@ class TextCleaner:
             width=page.width,
             height=page.height,
             source_page=page,
+            chapter_title="",
+            section_title="",
         )
 
     def clean_text(self, text: str) -> str:

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python .claude/skills/read-docx/extract_docx.py \"docs/Kant Project Proposal.docx\")",
+      "Skill(read-docx)"
+    ]
+  }
+}

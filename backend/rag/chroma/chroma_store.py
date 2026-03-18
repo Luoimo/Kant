@@ -480,5 +480,7 @@ class ChromaStore:
                 "chunk_index": meta.chunk_index,
                 "pdf_title": meta.pdf_title,
                 "pdf_author": meta.pdf_author,
+                "chapter_title": getattr(meta, "chapter_title", "") or "",
+                "section_title": getattr(meta, "section_title", "") or "",
             },
         )

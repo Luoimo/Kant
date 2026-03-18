@@ -184,7 +184,8 @@ class TestTextChunkToDict:
     def test_has_all_required_keys(self, chunk):
         d = chunk.to_dict()
         for key in ("chunk_id", "text", "char_count", "source",
-                    "page_numbers", "chunk_index", "pdf_title", "pdf_author"):
+                    "page_numbers", "chunk_index", "pdf_title", "pdf_author",
+                    "chapter_title", "section_title"):
             assert key in d
 
     def test_values_correct(self, chunk):

@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 _PAGE_MARKER = "\n<<<PAGE:{page}>>>\n"
 _PAGE_MARKER_RE = __import__("re").compile(r"<<<PAGE:(\d+)>>>")
 
+# 句末标点集合，用于“软切分”时从硬切点向右寻找自然边界
+_END_PUNCTS = "。！？；.!?;"
+
 
 # ---------------------------------------------------------------------------
 # 配置
@@ -41,7 +44,7 @@ class ChunkConfig:
     min_chunk_chars : 切分后最短保留字符数，低于此值的碎片直接丢弃
     """
     splitter: Literal["recursive", "token"] = "recursive"
-    chunk_size: int = 512
+    chunk_size: int = 1024
     chunk_overlap: int = 64
     encoding_name: str = "cl100k_base"
     separators: list[str] = field(default_factory=lambda: [
@@ -58,12 +61,14 @@ class ChunkConfig:
 
 @dataclass
 class ChunkMeta:
-    """随每个 TextChunk 携带的位置与来源信息。"""
+    """随每个 TextChunk 携带的位置、来源与书本章节信息。"""
     source: str             # PDF 文件路径
     page_numbers: list[int] # 该 chunk 涉及的页码（1-based）
     chunk_index: int        # 在整篇文档中的全局顺序（0-based）
     pdf_title: str = ""
     pdf_author: str = ""
+    chapter_title: str = "" # 所属章标题（来自 PDF 目录）
+    section_title: str = "" # 所属节标题（来自 PDF 目录）
 
 
 @dataclass
@@ -85,6 +90,8 @@ class TextChunk:
             "chunk_index": self.metadata.chunk_index,
             "pdf_title": self.metadata.pdf_title,
             "pdf_author": self.metadata.pdf_author,
+            "chapter_title": self.metadata.chapter_title,
+            "section_title": self.metadata.section_title,
         }
 
 
@@ -171,14 +178,24 @@ class TextChunker:
         if not page.text.strip():
             return []
         meta = pdf_metadata or {}
-        raw_chunks = self._splitter.split_text(page.text)
-        return self._build_chunks(
+        raw_chunks = self._soft_split(
+            page.text,
+            max_len=self.config.chunk_size,
+            overlap=self.config.chunk_overlap,
+        )
+        # 根据块内 is_heading/start_offset 为每个 chunk 推算 section_title（检测到的章节标题）
+        section_titles = self._section_titles_for_chunks(
+            raw_chunks, page.text, page.blocks
+        )
+        return self._build_chunks_with_section_titles(
             raw_chunks,
             page_numbers=[page.page_number],
             source=source,
             pdf_title=meta.get("title", ""),
             pdf_author=meta.get("author", ""),
             index_offset=index_offset,
+            chapter_title=getattr(page, "chapter_title", "") or "",
+            section_titles=section_titles,
         )
 
     def chunk_text(
@@ -192,7 +209,11 @@ class TextChunker:
     ) -> list[TextChunk]:
         """直接切分裸字符串，适用于单元测试或临时场景。"""
         meta = pdf_metadata or {}
-        raw_chunks = self._splitter.split_text(text)
+        raw_chunks = self._soft_split(
+            text,
+            max_len=self.config.chunk_size,
+            overlap=self.config.chunk_overlap,
+        )
         return self._build_chunks(
             raw_chunks,
             page_numbers=page_numbers or [],
@@ -200,6 +221,8 @@ class TextChunker:
             pdf_title=meta.get("title", ""),
             pdf_author=meta.get("author", ""),
             index_offset=index_offset,
+            chapter_title="",
+            section_title="",
         )
 
     # ------------------------------------------------------------------
@@ -222,25 +245,68 @@ class TextChunker:
     def _chunk_fulltext(self, content: CleanedContent) -> list[TextChunk]:
         """
         全文拼接后统一切分。
-        在各页边界处插入隐形标记，切分后通过扫描标记还原每个 chunk 涉及的页码。
         """
-        parts: list[str] = []
+        # 1) 构建不含任何分页标记的 full_text，并记录每一页在全文中的字符区间
+        full_text_parts: list[str] = []
+        page_spans: list[tuple[int, int, int]] = []  # (start_idx, end_idx, page_no)
+        cursor = 0
+
         for page in content.pages:
-            if page.text.strip():
-                parts.append(_PAGE_MARKER.format(page=page.page_number))
-                parts.append(page.text)
-        full_text = "".join(parts)
+            txt = page.text or ""
+            if not txt.strip():
+                continue
+            start = cursor
+            full_text_parts.append(txt)
+            cursor += len(txt)
+            end = cursor
+            page_spans.append((start, end, page.page_number))
 
-        raw_chunks = self._splitter.split_text(full_text)
+        full_text = "".join(full_text_parts)
 
-        # 追踪每个 raw_chunk 出现在 full_text 的位置，统计涉及页码
-        chunks = self._build_chunks_with_page_inference(
-            raw_chunks, full_text,
-            source=content.source,
-            pdf_title=content.metadata.get("title", ""),
-            pdf_author=content.metadata.get("author", ""),
+        # 2) 在全文维度使用“位置版软切分”：返回 (start, end) 区间列表
+        positions = self._soft_split_positions(
+            full_text,
+            max_len=self.config.chunk_size,
+            overlap=self.config.chunk_overlap,
         )
-        return chunks
+
+        # 3) 根据每个 chunk 区间与各页区间的交集，精确计算 page_numbers
+        result: list[TextChunk] = []
+        for start, end in positions:
+            chunk_text = full_text[start:end].strip()
+            if len(chunk_text) < self.config.min_chunk_chars:
+                continue
+
+            pages_in_chunk: list[int] = []
+            for p_start, p_end, p_no in page_spans:
+                if not (end <= p_start or start >= p_end):
+                    pages_in_chunk.append(p_no)
+
+            pages_in_chunk = sorted(set(pages_in_chunk))
+
+            result.append(
+                TextChunk(
+                    chunk_id=_sha256_id(chunk_text),
+                    text=chunk_text,
+                    char_count=len(chunk_text),
+                    metadata=ChunkMeta(
+                        source=content.source,
+                        page_numbers=pages_in_chunk,
+                        chunk_index=len(result),
+                        pdf_title=content.metadata.get("title", ""),
+                        pdf_author=content.metadata.get("author", ""),
+                        chapter_title="",
+                        section_title="",
+                    ),
+                )
+            )
+
+        logger.debug(
+            "TextChunker(fulltext): %s → %d 个 chunk（%s 模式，page_aware=%s）",
+            content.source, len(result),
+            self.config.splitter, self.config.page_aware,
+        )
+        return result
 
     # ------------------------------------------------------------------
     # 内部：构建 TextChunk
@@ -255,6 +321,8 @@ class TextChunker:
         pdf_title: str,
         pdf_author: str,
         index_offset: int = 0,
+        chapter_title: str = "",
+        section_title: str = "",
     ) -> list[TextChunk]:
         result: list[TextChunk] = []
         for i, text in enumerate(raw_chunks):
@@ -271,6 +339,86 @@ class TextChunker:
                     chunk_index=index_offset + len(result),
                     pdf_title=pdf_title,
                     pdf_author=pdf_author,
+                    chapter_title=chapter_title,
+                    section_title=section_title,
+                ),
+            ))
+        return result
+
+    def _section_titles_for_chunks(
+        self,
+        raw_chunks: list[str],
+        page_text: str,
+        blocks: list[dict],
+    ) -> list[str]:
+        """
+        根据每个 chunk 在 page_text 中的起始位置，取「不晚于该位置」的最后一个
+        is_heading 块的 heading_text 作为该 chunk 的 section_title。
+        """
+        if not raw_chunks or not page_text:
+            return [""] * len(raw_chunks)
+
+        # 在 page_text 中定位每个 chunk 的起始位置（顺序扫描，避免重复匹配）
+        chunk_starts: list[int] = []
+        search_from = 0
+        for chunk in raw_chunks:
+            prefix = (chunk.strip()[:50] or chunk.strip()).strip()
+            if not prefix:
+                chunk_starts.append(0)
+                continue
+            idx = page_text.find(prefix, search_from)
+            if idx == -1:
+                idx = page_text.find(prefix)
+            chunk_starts.append(max(0, idx if idx != -1 else 0))
+            if idx >= 0:
+                search_from = idx + len(prefix)
+
+        # 为每个 chunk 取最后一个 start_offset <= chunk_start 的标题块
+        result: list[str] = []
+        for chunk_start in chunk_starts:
+            section_title = ""
+            for blk in blocks:
+                if not blk.get("is_heading"):
+                    continue
+                start_off = blk.get("start_offset", 0)
+                if start_off <= chunk_start:
+                    section_title = blk.get("heading_text") or ""
+            result.append(section_title)
+        return result
+
+    def _build_chunks_with_section_titles(
+        self,
+        raw_chunks: list[str],
+        *,
+        page_numbers: list[int],
+        source: str,
+        pdf_title: str,
+        pdf_author: str,
+        index_offset: int = 0,
+        chapter_title: str = "",
+        section_titles: list[str],
+    ) -> list[TextChunk]:
+        """与 _build_chunks 类似，但每个 chunk 使用对应的 section_titles[i]。"""
+        result: list[TextChunk] = []
+        for i, text in enumerate(raw_chunks):
+            text = text.strip()
+            if len(text) < self.config.min_chunk_chars:
+                continue
+            section_title = (
+                section_titles[i] if i < len(section_titles) else ""
+            )
+            result.append(TextChunk(
+                chunk_id=_sha256_id(text),
+                text=text,
+                char_count=len(text),
+                metadata=ChunkMeta(
+                    source=source,
+                    page_numbers=page_numbers,
+                    chunk_index=index_offset + len(result),
+                    pdf_title=pdf_title,
+                    pdf_author=pdf_author,
+                    chapter_title=chapter_title,
+                    section_title=section_title,
                 ),
             ))
         return result
@@ -336,9 +484,139 @@ class TextChunker:
                     chunk_index=len(result),
                     pdf_title=pdf_title,
                     pdf_author=pdf_author,
+                    chapter_title="",
+                    section_title="",
                 ),
             ))
         return result
+
+    # ------------------------------------------------------------------
+    # 内部：软切分（在硬切分边界附近寻找句末标点）
+    # ------------------------------------------------------------------
+
+    def _soft_split(
+        self,
+        text: str,
+        *,
+        max_len: int,
+        overlap: int,
+        max_shift: int | None = None,
+    ) -> list[str]:
+        """
+        在不超过 ``max_len`` 的前提下，优先在句末标点处切分。
+
+        逻辑：
+        1. 以 ``max_len`` 为硬上限确定候选切点 ``hard_end``；
+        2. 从 ``hard_end`` 向右最多扫描 ``max_shift`` 个字符寻找 :data:`_END_PUNCTS`
+           中的任一标点；
+        3. 找到则在该标点之后切分；否则退回 ``hard_end`` 硬切；
+        4. 下一块从 ``end - overlap`` 位置继续，保证相邻块之间保留
+           ``overlap`` 个字符重叠。
+        """
+        text = text or ""
+        n = len(text)
+        if n == 0:
+            return []
+
+        if max_shift is None:
+            # 默认允许向右扫描 1/4 个 max_len 作为“句末缓冲区”
+            max_shift = max_len // 4
+            if max_shift <= 0:
+                max_shift = 32
+
+        chunks: list[str] = []
+        pos = 0
+
+        while pos < n:
+            hard_end = min(pos + max_len, n)
+            if hard_end >= n:
+                tail = text[pos:].strip()
+                if len(tail) >= self.config.min_chunk_chars:
+                    chunks.append(tail)
+                break
+
+            search_end = min(hard_end + max_shift, n)
+            cut_idx: int | None = None
+
+            # 在 [hard_end, search_end) 范围内寻找第一个句末标点
+            for i in range(hard_end, search_end):
+                if text[i] in _END_PUNCTS:
+                    cut_idx = i + 1  # 包含标点本身
+                    break
+
+            end = cut_idx if cut_idx is not None else hard_end
+            chunk_text = text[pos:end].strip()
+
+            if len(chunk_text) >= self.config.min_chunk_chars:
+                chunks.append(chunk_text)
+
+            if end >= n:
+                break
+
+            # 下一段的起点：保留 overlap 重叠
+            next_pos = max(0, end - overlap)
+            # 保护：避免极端情况下 next_pos 不前进导致死循环
+            if next_pos <= pos:
+                next_pos = end
+            pos = next_pos
+
+        return chunks
+
+    def _soft_split_positions(
+        self,
+        text: str,
+        *,
+        max_len: int,
+        overlap: int,
+        max_shift: int | None = None,
+    ) -> list[tuple[int, int]]:
+        """
+        与 :meth:`_soft_split` 类似，但返回的是 (start, end) 区间列表，而非文本切片。
+        专用于全文模式下配合字符区间推导页码。
+        """
+        text = text or ""
+        n = len(text)
+        if n == 0:
+            return []
+
+        if max_shift is None:
+            max_shift = max_len // 4
+            if max_shift <= 0:
+                max_shift = 32
+
+        positions: list[tuple[int, int]] = []
+        pos = 0
+
+        while pos < n:
+            hard_end = min(pos + max_len, n)
+            if hard_end >= n:
+                end = n
+                if end > pos:
+                    positions.append((pos, end))
+                break
+
+            search_end = min(hard_end + max_shift, n)
+            cut_idx: int | None = None
+
+            for i in range(hard_end, search_end):
+                if text[i] in _END_PUNCTS:
+                    cut_idx = i + 1
+                    break
+
+            end = cut_idx if cut_idx is not None else hard_end
+
+            if end > pos:
+                positions.append((pos, end))
+
+            if end >= n:
+                break
+
+            next_pos = max(0, end - overlap)
+            if next_pos <= pos:
+                next_pos = end
+            pos = next_pos
+
+        return positions
 
     # ------------------------------------------------------------------
     # 工厂

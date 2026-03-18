@@ -10,6 +10,7 @@
 #   CHROMA_API_KEY / CHROMA_TENANT / CHROMA_DATABASE  （Cloud 模式）
 #   或留空 CHROMA_API_KEY 使用本地 PersistentClient   （本地模式）
 
+import sys
 from pathlib import Path
 
 from backend.config import get_settings
@@ -25,7 +26,7 @@ def build_store() -> ChromaStore:
     chunk_cfg = ChunkConfig(
         chunk_size=512,
         chunk_overlap=64,
-        page_aware=True,
+        page_aware=False,
     )
     ingest_cfg = IngestConfig(
         skip_existing=True,     # 幂等：多次运行不重复写入
@@ -85,6 +86,12 @@ def run_query(store: ChromaStore, query: str, k: int = 5) -> None:
 
 
 def main() -> None:
+    # Windows 控制台默认编码可能导致中文/特殊符号输出失败，这里尽量统一为 UTF-8
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
     project_root = Path(__file__).resolve().parent.parent
     books_dir = project_root / "data" / "books"
 
