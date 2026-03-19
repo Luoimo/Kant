@@ -140,8 +140,8 @@ class DeepReadAgent:
         evidence_blocks: list[str] = []
         for i, d in enumerate(used_docs, start=1):
             meta = d.metadata or {}
-            title = meta.get("pdf_title") or "未知书名"
-            pages = meta.get("page_numbers") or ""
+            title = meta.get("book_title") or "未知书名"
+            pages = meta.get("section_indices") or ""
             evidence_blocks.append(
                 f"[证据{i}] 书名：{title}  页码：{pages}\n"
                 f"{(d.page_content or '').strip()}"
@@ -189,8 +189,8 @@ class DeepReadAgent:
         evidence_snippets: list[str] = []
         for i, d in enumerate(used_docs, start=1):
             meta = d.metadata or {}
-            title = meta.get("pdf_title") or "未知书名"
-            pages = meta.get("page_numbers") or ""
+            title = meta.get("book_title") or "未知书名"
+            pages = meta.get("section_indices") or ""
             snippet = (d.page_content or "").strip().replace("\n", " ")
             evidence_snippets.append(
                 f"[证据{i}] 书名：{title}  页码：{pages}\n{snippet[:300]}"

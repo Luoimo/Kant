@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 
 from backend.config import get_settings
 from backend.agents.deepread_agent import DeepReadAgent, deepread_node
+from backend.agents.note_agent import NoteAgent, notes_node
+from backend.agents.reading_plan_agent import ReadingPlanAgent, plan_node
+from backend.agents.recommendation_agent import RecommendationAgent, recommend_node
 from backend.llm.openai_client import get_llm
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.security.input_filter import InputSafetyResult, run_input_safety_check
@@ -23,6 +26,9 @@ from backend.security.input_filter import InputSafetyResult, run_input_safety_ch
 class GraphDeps:
     """图内依赖容器，仅通过闭包传入节点，不写入 state。"""
     deepread_agent: DeepReadAgent
+    notes_agent: NoteAgent
+    plan_agent: ReadingPlanAgent
+    recommend_agent: RecommendationAgent
 
 
 class GraphState(TypedDict, total=False):
@@ -45,13 +51,22 @@ class GraphState(TypedDict, total=False):
     deepread_query: str
     deepread_book_source: str | None
 
+    notes_query: str
+    notes_book_source: str | None
+    notes_raw_text: str | None
+
+    plan_query: str
+    plan_book_source: str | None
+
+    recommend_query: str
+
     # 输出
     answer: str
     citations: list[Any]
     retrieved_docs_count: int
 
     # Supervisor 路由字段
-    next: Literal["deepread", "finalize", "end"]
+    next: Literal["deepread", "notes", "plan", "recommend", "finalize", "end"]
 
 
 # ---------------------------------------------------------------------------
@@ -97,10 +112,9 @@ def classify_intent(user_input: str) -> IntentSchema:
 
 def supervisor_node(state: GraphState) -> GraphState:
     """
-    最小 Supervisor：
-    - 第一次必走 deepread
-    - deepread 完成后走 finalize
-    - finalize 后结束
+    Supervisor：
+    - 安全检查 → 意图识别 → 路由到对应 agent
+    - agent 完成后返回 supervisor → finalize
     """
     print("[Graph] → supervisor_node", file=sys.stdout)
 
@@ -145,46 +159,96 @@ def supervisor_node(state: GraphState) -> GraphState:
             file=sys.stdout,
         )
 
-    # 3) 若 deepread 已产出 answer，本轮回合结束，走 finalize，避免 deepread → supervisor 死循环
+    # 3) 若 agent 已产出 answer，本轮回合结束，走 finalize
     if state.get("answer"):
         state["next"] = "finalize"
         return state
 
-    # 4) 根据意图路由到对应 agent；路由前写入本轮的“子任务”，子 Agent 只读这些字段
+    # 4) 根据意图路由到对应 agent，写入子任务字段
     intent = state.get("intent") or "deepread"
-    state["deepread_query"] = user_input
-    state["deepread_book_source"] = state.get("book_source")
-    state["next"] = "deepread"
+    if intent == "notes":
+        state["notes_query"] = user_input
+        state["notes_book_source"] = state.get("book_source")
+        state["next"] = "notes"
+    elif intent == "plan":
+        state["plan_query"] = user_input
+        state["plan_book_source"] = state.get("book_source")
+        state["next"] = "plan"
+    elif intent == "recommend":
+        state["recommend_query"] = user_input
+        state["next"] = "recommend"
+    else:
+        # deepread（默认）
+        state["deepread_query"] = user_input
+        state["deepread_book_source"] = state.get("book_source")
+        state["next"] = "deepread"
 
     return state
 
 
 def finalize_node(state: GraphState) -> GraphState:
     print("[Graph] → finalize_node", file=sys.stdout)
-    # 这里先保持最小：不做额外格式化，只负责结束。
     state["next"] = "end"
     return state
 
 
 def build_minimal_supervisor_graph(*, store: ChromaStore | None = None):
     """
-    构建最小可跑的 supervisor 编排图：
+    构建 supervisor 编排图：
 
-    START -> supervisor -> deepread -> supervisor -> finalize -> END
+    START -> supervisor -> [deepread|notes|plan|recommend] -> supervisor -> finalize -> END
 
     """
     if store is None:
         settings = get_settings()
         store = ChromaStore(collection_name=settings.chroma_database)
 
-    deps = GraphDeps(deepread_agent=DeepReadAgent(store=store))
+    deps = GraphDeps(
+        deepread_agent=DeepReadAgent(store=store),
+        notes_agent=NoteAgent(store=store),
+        plan_agent=ReadingPlanAgent(store=store),
+        recommend_agent=RecommendationAgent(store=store),
+    )
 
     def _deepread(state: GraphState) -> GraphState:
         print("[Graph] → deepread_node", file=sys.stdout)
         patch = deepread_node(state, agent=deps.deepread_agent)  # type: ignore[arg-type]
-        state.update(patch)  # answer/citations/...
+        state.update(patch)
         print(
             f"[Graph]   deepread_node done, "
+            f"retrieved_docs_count={state.get('retrieved_docs_count', 0)}",
+            file=sys.stdout,
+        )
+        return state
+
+    def _notes(state: GraphState) -> GraphState:
+        print("[Graph] → notes_node", file=sys.stdout)
+        patch = notes_node(state, agent=deps.notes_agent)  # type: ignore[arg-type]
+        state.update(patch)
+        print(
+            f"[Graph]   notes_node done, "
+            f"retrieved_docs_count={state.get('retrieved_docs_count', 0)}",
+            file=sys.stdout,
+        )
+        return state
+
+    def _plan(state: GraphState) -> GraphState:
+        print("[Graph] → plan_node", file=sys.stdout)
+        patch = plan_node(state, agent=deps.plan_agent)  # type: ignore[arg-type]
+        state.update(patch)
+        print(
+            f"[Graph]   plan_node done, "
+            f"retrieved_docs_count={state.get('retrieved_docs_count', 0)}",
+            file=sys.stdout,
+        )
+        return state
+
+    def _recommend(state: GraphState) -> GraphState:
+        print("[Graph] → recommend_node", file=sys.stdout)
+        patch = recommend_node(state, agent=deps.recommend_agent)  # type: ignore[arg-type]
+        state.update(patch)
+        print(
+            f"[Graph]   recommend_node done, "
             f"retrieved_docs_count={state.get('retrieved_docs_count', 0)}",
             file=sys.stdout,
         )
@@ -193,6 +257,9 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None):
     graph = StateGraph(GraphState)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("deepread", _deepread)
+    graph.add_node("notes", _notes)
+    graph.add_node("plan", _plan)
+    graph.add_node("recommend", _recommend)
     graph.add_node("finalize", finalize_node)
 
     graph.add_edge(START, "supervisor")
@@ -201,10 +268,16 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None):
         lambda s: s.get("next", "deepread"),
         {
             "deepread": "deepread",
+            "notes": "notes",
+            "plan": "plan",
+            "recommend": "recommend",
             "finalize": "finalize",
         },
     )
     graph.add_edge("deepread", "supervisor")
+    graph.add_edge("notes", "supervisor")
+    graph.add_edge("plan", "supervisor")
+    graph.add_edge("recommend", "supervisor")
     graph.add_conditional_edges(
         "finalize",
         lambda s: s.get("next", "end"),
@@ -215,7 +288,6 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None):
     checkpointer = MemorySaver()
     compiled = graph.compile(checkpointer=checkpointer)
 
-    # agent 通过闭包注入到 _deepread，不放入 state，避免 checkpointer 序列化 DeepReadAgent 报错
     return compiled
 
 
@@ -243,4 +315,4 @@ def run_minimal_graph(
         "user_input": query,
         "book_source": book_source,
     }
-    return app.invoke(init, config={"thread_id": thread_id})  # type: ignore[return-value]
+    return app.invoke(init, config={"configurable": {"thread_id": thread_id}})  # type: ignore[return-value]

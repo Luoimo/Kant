@@ -1,79 +1,146 @@
-# _*_ coding:utf-8 _*_
-# @Time:2026/3/9
-# @Author:Chloe
-# @File:note_agent
-# @Project:Kant
-
-"""
-NoteAgent 设计说明
-==================
-
-一、定位与意图
---------------
-对应 orchestrator 意图 "notes"：用户请求「整理/总结/结构化读书笔记」。
-与 DeepReadAgent 的区别：
-- DeepRead：针对问题做「基于证据的一问一答」，产出 answer + citations。
-- NoteAgent：针对书或已有文字做「归纳、结构化」，产出笔记（大纲/要点/思维导图式树），可带引用。
-
-二、输入（由总控写入 state，本 Agent 只读）
-------------------------------------------
-- notes_query: str
-  - 用户原话或结构化指令，例如：
-    - "把《焦虑》第三章整理成大纲"
-    - "帮我总结一下刚才读的内容"
-    - "把这些零散笔记整理成结构化笔记"
-- notes_book_source: str | None
-  - 指定某本书（与 Chroma 的 source 一致）时做「按书检索再归纳」；为 None 时可做「纯文本整理」或结合上文。
-- 可选（后续扩展）：notes_raw_text: str —— 用户粘贴的待整理原文（不经过 RAG）。
-
-三、输出（写回 state / 供 API）
-------------------------------
-- answer: str
-  - 主产出：结构化笔记正文（Markdown），可含标题、要点、引用页码、TODO、问题列表等。
-- citations: list[Citation]
-  - 若走了 RAG，与 DeepRead 相同的引用结构，便于前端展示来源。
-- retrieved_docs_count: int
-  - 检索到的 chunk 数量（0 表示未走 RAG 或 RAG 无结果）。
-- 可选（与 SharedMemoryStore 对接时）：
-  - 写入 memory：notes[]、note_index（书名/章节 -> 笔记 id），供 GET /notes、后续问答或书单参考。
-
-四、核心功能（建议实现顺序）
----------------------------
-1. 按书/章节归纳（RAG + 结构化）
-   - 用 ChromaStore.similarity_search 按 notes_book_source（及可选章节）检索；
-   - 将检索到的 chunks 交给 LLM，要求输出：大纲 / 要点列表 / 关键概念 + 对应页码；
-   - 产出带 citations 的 Markdown 笔记。
-
-2. 零散笔记结构化（无书 RAG）
-   - 输入：用户粘贴的一段文字（或从 state 取的 notes_raw_text）；
-   - LLM 输出：分级标题、要点、TODO、待解决问题列表等；
-   - 不涉及检索时 citations 为空。
-
-3. 文字版思维导图（可选）
-   - 同一套 RAG 或原文输入，要求 LLM 输出「缩进树 / 大纲树」形式的 Markdown（如 - 主题 \\n   - 分支1 \\n   - 分支2），便于导出或展示。
-
-4. 与记忆对接（可选，依赖 SharedMemoryStore）
-   - 将本次产出的笔记写入 memory.notes，并更新 note_index；
-   - GET /notes 时从 memory 读取，可由本 Agent 或 API 层负责。
-
-五、与现有组件的关系
--------------------
-- 与 DeepReadAgent：共用 ChromaStore、Citation 构建方式；不共用 prompt（DeepRead 强调「只答问」，Note 强调「归纳与结构」）。
-- 与 Orchestrator：总控在 intent=notes 时写入 notes_query、notes_book_source，路由到 NoteAgent；NoteAgent 只读这两项，写回 answer/citations/retrieved_docs_count。
-- 与 GraphDeps：与 DeepRead 一样，NoteAgent 实例通过依赖注入（GraphDeps.notes_agent）传入节点，不放入 state。
-
-六、接口约定（与 DeepRead 对齐）
---------------------------------
-- 类：NoteAgent(store: ChromaStore | None = None, llm=None, ...).
-- 方法：run(*, query: str, book_source: str | None = None, raw_text: str | None = None) -> NoteResult.
-- NoteResult：与 DeepReadResult 类似，至少含 answer, citations, retrieved_docs; 可选 structured_notes（dict/list）供 API 使用。
-- 节点函数：notes_node(state, *, agent: NoteAgent) -> dict，只读 state["notes_query"]、state["notes_book_source"]，写回 answer/citations/retrieved_docs_count。
-"""
-
 from __future__ import annotations
 
-# 待实现：NoteAgent、NoteResult、notes_node
-# from backend.rag.chroma.chroma_store import ChromaStore
-# from backend.xai.citation import Citation, build_citations
+from dataclasses import dataclass
+from typing import Any
+import sys
 
-__all__ = []  # 实现后补充 "NoteAgent", "NoteResult", "notes_node"
+from langchain_core.documents import Document
+
+from backend.config import get_settings
+from backend.llm.openai_client import get_llm
+from backend.rag.chroma.chroma_store import ChromaStore
+from backend.xai.citation import Citation, build_citations
+
+sep = "\n\n"
+
+NOTE_SYSTEM_PROMPT = """你是"笔记整理助手（NoteAgent）"，擅长将书籍内容或零散文字整理成结构化笔记。
+
+核心职责：
+1. 将检索到的内容或用户提供的文字，整理成清晰的 Markdown 格式笔记。
+2. 笔记应包含：分级标题、要点列表、关键概念、页码引用（如有）、待探索问题（可选）。
+3. 重点在于"归纳与结构化"，而非一问一答。
+4. 如果内容不足，如实说明，不要编造书中不存在的内容。
+
+输出格式：
+- 使用 Markdown 标题（## ### ####）组织层次
+- 要点用 - 列表
+- 关键概念可加粗 **概念**
+- 页码引用格式：（p.XX）或（见某书，p.XX）
+"""
+
+
+@dataclass(frozen=True)
+class NoteResult:
+    answer: str
+    citations: list[Citation]
+    retrieved_docs: list[Document]
+
+
+class NoteAgent:
+    def __init__(
+        self,
+        *,
+        store: ChromaStore | None = None,
+        llm=None,
+        k: int = 8,
+    ) -> None:
+        if store is None:
+            settings = get_settings()
+            store = ChromaStore(collection_name=settings.chroma_database)
+
+        self.store = store
+        self.llm = llm or get_llm(temperature=0.3)
+        self.k = k
+
+    def run(
+        self,
+        *,
+        query: str,
+        book_source: str | None = None,
+        raw_text: str | None = None,
+    ) -> NoteResult:
+        # 路径 1：有 RAG（book_source 指定时）
+        if book_source or (not raw_text):
+            filter_ = {"source": book_source} if book_source else None
+            docs = self.store.similarity_search(query, k=self.k, filter=filter_)
+            citations = build_citations(docs)
+
+            print(
+                f"[NoteAgent] query={query!r}, "
+                f"book_source={book_source!r}, hits={len(docs)}",
+                file=sys.stdout,
+            )
+
+            if not docs and not raw_text:
+                return NoteResult(
+                    answer="本地书库没有检索到相关内容，无法生成笔记。请先将相关 PDF 入库，或提供待整理的原文。",
+                    citations=[],
+                    retrieved_docs=[],
+                )
+
+            answer = self._synthesize_notes(query, docs, raw_text)
+            return NoteResult(answer=answer, citations=citations, retrieved_docs=docs)
+
+        # 路径 2：纯文本整理（raw_text，无 RAG）
+        print(f"[NoteAgent] raw_text mode, len={len(raw_text)}", file=sys.stdout)
+        answer = self._synthesize_notes(query, [], raw_text)
+        return NoteResult(answer=answer, citations=[], retrieved_docs=[])
+
+    def _synthesize_notes(
+        self,
+        query: str,
+        docs: list[Document],
+        raw_text: str | None = None,
+    ) -> str:
+        content_blocks: list[str] = []
+
+        for i, d in enumerate(docs, start=1):
+            meta = d.metadata or {}
+            title = meta.get("book_title") or "未知书名"
+            pages = meta.get("section_indices") or ""
+            content_blocks.append(
+                f"[片段{i}] 书名：{title}  页码：{pages}\n"
+                f"{(d.page_content or '').strip()}"
+            )
+
+        if raw_text:
+            content_blocks.append(f"[用户提供文本]\n{raw_text.strip()}")
+
+        user_prompt = f"""用户笔记整理请求：
+{query}
+
+请将以下内容整理成结构化 Markdown 笔记：
+
+{'【书库检索片段 + 用户文本】：' if docs and raw_text else '【书库检索片段】：' if docs else '【用户提供文本】：'}
+{sep.join(content_blocks)}
+
+整理要求：
+1. 使用 Markdown 格式：分级标题、要点列表、关键概念加粗。
+2. 对重要内容尽量标注页码引用（例如：（p.XX）或（见某书，p.XX））。
+3. 可在末尾添加"待探索问题"小节（可选）。
+4. 只整理实际出现的内容，不要添加书中没有的信息。"""
+
+        msg = self.llm.invoke(
+            [
+                {"role": "system", "content": NOTE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        return getattr(msg, "content", str(msg))
+
+
+def notes_node(state: dict[str, Any], *, agent: NoteAgent) -> dict[str, Any]:
+    """节点函数：读取 notes_query / notes_book_source / notes_raw_text，写回 answer/citations/retrieved_docs_count。"""
+    query: str = state.get("notes_query", "") or state.get("user_input", "")
+    book_source: str | None = state.get("notes_book_source") or state.get("book_source")
+    raw_text: str | None = state.get("notes_raw_text")
+
+    result = agent.run(query=query, book_source=book_source, raw_text=raw_text)
+    return {
+        "answer": result.answer,
+        "citations": result.citations,
+        "retrieved_docs_count": len(result.retrieved_docs),
+    }
+
+
+__all__ = ["NoteAgent", "NoteResult", "notes_node"]

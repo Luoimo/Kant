@@ -21,8 +21,8 @@ def main() -> None:
     print("\n=== Citations ===\n")
     citations = state.get("citations") or []
     for i, c in enumerate(citations, start=1):
-        pages = getattr(c, "page_numbers", None) or []
-        print(f"[{i}] source={getattr(c, 'source', '')} pages={pages}")
+        sections = getattr(c, "section_indices", None) or []
+        print(f"[{i}] source={getattr(c, 'source', '')} sections={sections}")
         snippet = getattr(c, "snippet", None)
         if snippet:
             print(f"    {snippet}\n")

@@ -8,17 +8,17 @@ from langchain_core.documents import Document
 @dataclass(frozen=True)
 class Citation:
     source: str
-    pdf_title: str | None = None
-    pdf_author: str | None = None
-    page_numbers: list[int] | None = None
+    book_title: str | None = None
+    author: str | None = None
+    section_indices: list[int] | None = None
     chunk_id: str | None = None
     chunk_index: int | None = None
     snippet: str | None = None
-    chapter_title: str | None = None  # 书本章标题（来自 PDF 目录）
-    section_title: str | None = None  # 书本节标题（来自 PDF 目录）
+    chapter_title: str | None = None  # 书本章标题（来自 TOC）
+    section_title: str | None = None  # 书本节标题（来自 TOC）
 
 
-def _parse_page_numbers(value: object) -> list[int]:
+def _parse_section_indices(value: object) -> list[int]:
     if value is None:
         return []
     if isinstance(value, list):
@@ -50,7 +50,6 @@ def build_citations(docs: list[Document], *, snippet_chars: int = 240) -> list[C
         m = d.metadata or {}
         source = str(m.get("source") or "")
         if not source:
-            # 允许缺省，但尽量不产生“无来源”引用
             continue
 
         text = (d.page_content or "").strip()
@@ -59,9 +58,9 @@ def build_citations(docs: list[Document], *, snippet_chars: int = 240) -> list[C
         citations.append(
             Citation(
                 source=source,
-                pdf_title=m.get("pdf_title"),
-                pdf_author=m.get("pdf_author"),
-                page_numbers=_parse_page_numbers(m.get("page_numbers")),
+                book_title=m.get("book_title"),
+                author=m.get("author"),
+                section_indices=_parse_section_indices(m.get("section_indices")),
                 chunk_id=m.get("chunk_id"),
                 chunk_index=m.get("chunk_index"),
                 snippet=snippet,

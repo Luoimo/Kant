@@ -334,7 +334,7 @@ class ChromaStore:
 
         :param query:  查询文本
         :param k:      返回的最相关 chunk 数量
-        :param filter: Chroma where 过滤条件，例如 ``{"pdf_title": "Critique of Pure Reason"}``
+        :param filter: Chroma where 过滤条件，例如 ``{"book_title": "Critique of Pure Reason"}``
         """
         return self._db.similarity_search(query, k=k, filter=filter)
 

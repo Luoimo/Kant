@@ -2,8 +2,8 @@
 # 快速验证 RAG 全链路的脚本（支持 Chroma Cloud / 本地双模式）
 #
 # 功能：
-# 1. 扫描 data/books 目录下所有 PDF
-# 2. 对每个 PDF 执行：提取 → 清洗 → 切块 → 嵌入 → 写入 Chroma
+# 1. 扫描 data/books 目录下所有 EPUB
+# 2. 对每个 EPUB 执行：提取 → 清洗 → 切块 → 嵌入 → 写入 Chroma
 # 3. 用示例查询做检索，打印命中结果
 #
 # 运行前确认 .env 已配置：
@@ -26,7 +26,7 @@ def build_store() -> ChromaStore:
     chunk_cfg = ChunkConfig(
         chunk_size=512,
         chunk_overlap=64,
-        page_aware=False,
+        section_aware=False,
     )
     ingest_cfg = IngestConfig(
         skip_existing=True,     # 幂等：多次运行不重复写入
@@ -52,15 +52,15 @@ def build_store() -> ChromaStore:
 
 
 def ingest_books(store: ChromaStore, books_dir: Path) -> None:
-    """将 data/books 下所有 PDF 写入向量库。"""
-    pdf_paths = sorted(books_dir.glob("*.pdf"))
-    if not pdf_paths:
-        print(f"[WARN] 目录中没有找到 PDF：{books_dir}")
+    """将 data/books 下所有 EPUB 写入向量库。"""
+    epub_paths = sorted(books_dir.glob("*.epub"))
+    if not epub_paths:
+        print(f"[WARN] 目录中没有找到 EPUB：{books_dir}")
         return
 
-    for path in pdf_paths:
+    for path in epub_paths:
         print(f"\n=== Ingest: {path.name} ===")
-        result = store.ingest_pdf(path)
+        result = store.ingest(path)
         print(result)
 
 
@@ -78,10 +78,10 @@ def run_query(store: ChromaStore, query: str, k: int = 5) -> None:
         snippet = doc.page_content.strip().replace("\n", " ")
         print(f"\n--- Result #{i} ---")
         print(f"source     : {meta.get('source')}")
-        print(f"pages      : {meta.get('page_numbers', '')}")
+        print(f"sections   : {meta.get('section_indices', '')}")
         print(f"chunk_index: {meta.get('chunk_index')}")
-        print(f"title      : {meta.get('pdf_title')}")
-        print(f"author     : {meta.get('pdf_author')}")
+        print(f"title      : {meta.get('book_title')}")
+        print(f"author     : {meta.get('author')}")
         print(f"content    : {snippet[:300]}{'...' if len(snippet) > 300 else ''}")
 
 
