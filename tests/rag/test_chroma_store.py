@@ -1,8 +1,4 @@
 # _*_ coding:utf-8 _*_
-# @Time:2026/3/10
-# @Author:Chloe
-# @File:test_chroma_store.py
-# @Project:Kant
 """
 ChromaStore 单元测试。
 
@@ -19,7 +15,7 @@ ChromaStore 单元测试。
 - get_stats 返回正确字段
 - list_sources 去重排序
 - IngestResult.__str__ 格式
-- ingest_pdf 全流水线（pipeline 步骤均 mock）
+- ingest 全流水线（pipeline 步骤均 mock）
 - _resolve_db 多 collection 支持
 """
 from __future__ import annotations
@@ -90,17 +86,17 @@ class TestIngestResult:
 
     def test_str_contains_filename(self):
         r = IngestResult(
-            source="/path/to/kant.pdf",
+            source="/path/to/kant.epub",
             total_chunks=100,
             added=90,
             skipped=10,
             collection_name="kant",
         )
-        assert "kant.pdf" in str(r)
+        assert "kant.epub" in str(r)
 
     def test_str_contains_counts(self):
         r = IngestResult(
-            source="kant.pdf",
+            source="kant.epub",
             total_chunks=100,
             added=90,
             skipped=10,
@@ -113,7 +109,7 @@ class TestIngestResult:
 
     def test_str_contains_collection_name(self):
         r = IngestResult(
-            source="kant.pdf",
+            source="kant.epub",
             total_chunks=5,
             added=5,
             skipped=0,
@@ -129,35 +125,35 @@ class TestIngestResult:
 class TestChunkToDocument:
 
     def test_page_content_equals_chunk_text(self):
-        chunk = make_chunk(text="Hello philosophical world.", page_numbers=[3, 4])
+        chunk = make_chunk(text="Hello philosophical world.", section_indices=[3, 4])
         doc = ChromaStore._chunk_to_document(chunk)
         assert doc.page_content == chunk.text
 
     def test_metadata_source(self):
-        chunk = make_chunk(source="kant.pdf")
+        chunk = make_chunk(source="kant.epub")
         doc = ChromaStore._chunk_to_document(chunk)
-        assert doc.metadata["source"] == "kant.pdf"
+        assert doc.metadata["source"] == "kant.epub"
 
-    def test_page_numbers_serialized_as_string(self):
-        chunk = make_chunk(page_numbers=[1, 2, 3])
+    def test_section_indices_serialized_as_string(self):
+        chunk = make_chunk(section_indices=[1, 2, 3])
         doc = ChromaStore._chunk_to_document(chunk)
-        assert doc.metadata["page_numbers"] == "1,2,3"
+        assert doc.metadata["section_indices"] == "1,2,3"
 
-    def test_single_page_serialized(self):
-        chunk = make_chunk(page_numbers=[7])
+    def test_single_index_serialized(self):
+        chunk = make_chunk(section_indices=[7])
         doc = ChromaStore._chunk_to_document(chunk)
-        assert doc.metadata["page_numbers"] == "7"
+        assert doc.metadata["section_indices"] == "7"
 
-    def test_empty_page_numbers(self):
-        chunk = make_chunk(page_numbers=[])
+    def test_empty_section_indices(self):
+        chunk = make_chunk(section_indices=[])
         doc = ChromaStore._chunk_to_document(chunk)
-        assert doc.metadata["page_numbers"] == ""
+        assert doc.metadata["section_indices"] == ""
 
     def test_metadata_keys_present(self):
         chunk = make_chunk()
         doc = ChromaStore._chunk_to_document(chunk)
-        for key in ("chunk_id", "char_count", "source", "page_numbers",
-                    "chunk_index", "pdf_title", "pdf_author",
+        for key in ("chunk_id", "char_count", "source", "section_indices",
+                    "chunk_index", "book_title", "author",
                     "chapter_title", "section_title"):
             assert key in doc.metadata
 
@@ -171,15 +167,15 @@ class TestChunkToDocument:
         doc = ChromaStore._chunk_to_document(chunk)
         assert doc.metadata["char_count"] == chunk.char_count
 
-    def test_pdf_title_author_in_metadata(self):
+    def test_book_title_author_in_metadata(self):
         chunk = make_chunk()
         doc = ChromaStore._chunk_to_document(chunk)
-        assert doc.metadata["pdf_title"] == SAMPLE_TITLE
-        assert doc.metadata["pdf_author"] == SAMPLE_AUTHOR
+        assert doc.metadata["book_title"] == SAMPLE_TITLE
+        assert doc.metadata["author"] == SAMPLE_AUTHOR
 
     def test_all_metadata_values_are_primitive(self):
         """Chroma 只接受 str/int/float/bool 类型的元数据值。"""
-        chunk = make_chunk(page_numbers=[1, 2])
+        chunk = make_chunk(section_indices=[1, 2])
         doc = ChromaStore._chunk_to_document(chunk)
         for v in doc.metadata.values():
             assert isinstance(v, (str, int, float, bool)), \
@@ -250,7 +246,6 @@ class TestIngestChunksDedup:
 
     def test_skip_existing_false_ignores_dedup(self, store, mock_collection, sample_chunks):
         store.ingest_config = IngestConfig(skip_existing=False)
-        # 即使 collection 返回已有 id，也不去重
         existing_ids = [c.chunk_id for c in sample_chunks]
         mock_collection.get.return_value = {"ids": existing_ids}
 
@@ -295,24 +290,24 @@ class TestDeleteSource:
 
     def test_returns_count_of_deleted(self, store, mock_collection):
         mock_collection.get.return_value = {"ids": ["id1", "id2", "id3"]}
-        count = store.delete_source("kant.pdf")
+        count = store.delete_source("kant.epub")
         assert count == 3
 
     def test_collection_delete_called_with_ids(self, store, mock_collection):
         mock_collection.get.return_value = {"ids": ["id1", "id2"]}
-        store.delete_source("kant.pdf")
+        store.delete_source("kant.epub")
         mock_collection.delete.assert_called_once_with(ids=["id1", "id2"])
 
     def test_no_delete_when_no_matching_ids(self, store, mock_collection):
         mock_collection.get.return_value = {"ids": []}
-        count = store.delete_source("nonexistent.pdf")
+        count = store.delete_source("nonexistent.epub")
         assert count == 0
         mock_collection.delete.assert_not_called()
 
     def test_where_filter_uses_source(self, store, mock_collection):
         mock_collection.get.return_value = {"ids": []}
-        store.delete_source("specific_source.pdf")
-        mock_collection.get.assert_called_with(where={"source": "specific_source.pdf"})
+        store.delete_source("specific_source.epub")
+        mock_collection.get.assert_called_with(where={"source": "specific_source.epub"})
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +329,7 @@ class TestSimilaritySearch:
 
     def test_filter_passed_through(self, store, mock_db):
         mock_db.similarity_search.return_value = []
-        flt = {"pdf_title": "Critique"}
+        flt = {"book_title": "Critique"}
         store.similarity_search("q", filter=flt)
         mock_db.similarity_search.assert_called_once_with("q", k=4, filter=flt)
 
@@ -353,7 +348,7 @@ class TestSimilaritySearchWithScore:
 
     def test_k_and_filter_passed_through(self, store, mock_db):
         mock_db.similarity_search_with_score.return_value = []
-        flt = {"source": "kant.pdf"}
+        flt = {"source": "kant.epub"}
         store.similarity_search_with_score("q", k=5, filter=flt)
         mock_db.similarity_search_with_score.assert_called_once_with(
             "q", k=5, filter=flt
@@ -410,22 +405,22 @@ class TestListSources:
     def test_returns_sorted_unique_sources(self, store, mock_collection):
         mock_collection.get.return_value = {
             "metadatas": [
-                {"source": "b.pdf"},
-                {"source": "a.pdf"},
-                {"source": "b.pdf"},  # 重复
-                {"source": "c.pdf"},
+                {"source": "b.epub"},
+                {"source": "a.epub"},
+                {"source": "b.epub"},  # 重复
+                {"source": "c.epub"},
             ]
         }
         sources = store.list_sources()
-        assert sources == ["a.pdf", "b.pdf", "c.pdf"]
+        assert sources == ["a.epub", "b.epub", "c.epub"]
 
     def test_empty_source_excluded(self, store, mock_collection):
         mock_collection.get.return_value = {
-            "metadatas": [{"source": ""}, {"source": "kant.pdf"}]
+            "metadatas": [{"source": ""}, {"source": "kant.epub"}]
         }
         sources = store.list_sources()
         assert "" not in sources
-        assert "kant.pdf" in sources
+        assert "kant.epub" in sources
 
     def test_empty_collection_returns_empty_list(self, store, mock_collection):
         mock_collection.get.return_value = {"metadatas": []}
@@ -437,26 +432,26 @@ class TestListSources:
 
 
 # ---------------------------------------------------------------------------
-# ingest_pdf —— 全流水线（pipeline 步骤 mock）
+# ingest —— 全流水线（pipeline 步骤 mock）
 # ---------------------------------------------------------------------------
 
-class TestIngestPdf:
+class TestIngest:
 
     def test_calls_pipeline_in_order(self, store, tmp_path, monkeypatch):
-        """验证 ingest_pdf 按顺序调用 PDFExtractor → TextCleaner → TextChunker。"""
+        """验证 ingest 按顺序调用 EpubExtractor → TextCleaner → TextChunker。"""
         call_order: list[str] = []
 
-        mock_pdf_content = MagicMock()
-        mock_pdf_content.pages = [MagicMock()]
+        mock_book_content = MagicMock()
+        mock_book_content.sections = [MagicMock()]
 
         mock_cleaned = MagicMock()
-        mock_cleaned.pages = [MagicMock()]
+        mock_cleaned.sections = [MagicMock()]
 
         mock_chunks = [make_chunk(f"chunk {i}", chunk_index=i) for i in range(3)]
 
         mock_extractor_instance = MagicMock()
         mock_extractor_instance.extract.side_effect = \
-            lambda **kw: (call_order.append("extract"), mock_pdf_content)[1]
+            lambda: (call_order.append("extract"), mock_book_content)[1]
 
         mock_cleaner_instance = MagicMock()
         mock_cleaner_instance.clean_content.side_effect = \
@@ -467,7 +462,7 @@ class TestIngestPdf:
             lambda c: (call_order.append("chunk"), mock_chunks)[1]
 
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.PDFExtractor",
+            "backend.rag.chroma.chroma_store.EpubExtractor",
             lambda path: mock_extractor_instance,
         )
         monkeypatch.setattr(
@@ -479,10 +474,10 @@ class TestIngestPdf:
             lambda cfg: mock_chunker_instance,
         )
 
-        pdf_path = tmp_path / "fake.pdf"
-        pdf_path.write_bytes(b"%PDF-1.4")  # 假文件，不会被真正读取
+        epub_path = tmp_path / "fake.epub"
+        epub_path.write_bytes(b"fake epub content")
 
-        result = store.ingest_pdf(pdf_path)
+        result = store.ingest(epub_path)
 
         assert call_order == ["extract", "clean", "chunk"]
         assert isinstance(result, IngestResult)
@@ -491,20 +486,20 @@ class TestIngestPdf:
     def test_returns_ingest_result(self, store, tmp_path, monkeypatch):
         mock_chunks = [make_chunk("content", chunk_index=0)]
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.PDFExtractor",
-            lambda path: MagicMock(extract=lambda **kw: MagicMock(pages=[])),
+            "backend.rag.chroma.chroma_store.EpubExtractor",
+            lambda path: MagicMock(extract=lambda: MagicMock(sections=[])),
         )
         monkeypatch.setattr(
             "backend.rag.chroma.chroma_store.TextCleaner",
-            lambda cfg: MagicMock(clean_content=lambda c: MagicMock(pages=[])),
+            lambda cfg: MagicMock(clean_content=lambda c: MagicMock(sections=[])),
         )
         monkeypatch.setattr(
             "backend.rag.chroma.chroma_store.TextChunker",
             lambda cfg: MagicMock(chunk_content=lambda c: mock_chunks),
         )
-        pdf_path = tmp_path / "fake.pdf"
-        pdf_path.write_bytes(b"%PDF-1.4")
-        result = store.ingest_pdf(pdf_path)
+        epub_path = tmp_path / "fake.epub"
+        epub_path.write_bytes(b"fake epub content")
+        result = store.ingest(epub_path)
         assert isinstance(result, IngestResult)
 
 
@@ -529,12 +524,9 @@ class TestResolveDb:
         new_db._collection = MagicMock()
         new_db._collection.name = "other_col"
 
-        call_count = 0
         original_db = mock_db
 
         def fake_chroma(**kwargs):
-            nonlocal call_count
-            call_count += 1
             return new_db if kwargs.get("collection_name") == "other_col" else original_db
 
         monkeypatch.setattr("backend.rag.chroma.chroma_store.Chroma", fake_chroma)

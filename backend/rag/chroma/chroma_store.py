@@ -18,7 +18,7 @@ from backend.config import get_settings
 from backend.llm.openai_client import get_embeddings
 from backend.rag.chunker.text_chunker import ChunkConfig, TextChunk, TextChunker
 from backend.rag.cleaner.text_cleaner import CleanConfig, TextCleaner
-from backend.rag.extracter.pdf_extractor import PDFExtractor
+from backend.rag.extracter.epub_extractor import EpubExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class Chroma:
 @dataclass
 class IngestConfig:
     """
-    ingest_pdf / ingest_chunks 的行为配置。
+    ingest / ingest_chunks 的行为配置。
 
     skip_existing   : True → 按 chunk_id 去重，已存在的 chunk 跳过（幂等写入）
     embed_batch_size: 每批次送入 Embedding API 的 chunk 数量，避免超出速率限制
@@ -197,7 +197,7 @@ class IngestResult:
 
 class ChromaStore:
     """
-    PDF 向量化存储管理类，封装「提取 → 清洗 → 切块 → 向量化 → 存储」全流水线。
+    EPUB 向量化存储管理类，封装「提取 → 清洗 → 切块 → 向量化 → 存储」全流水线。
 
     使用 :class:`Chroma`（基于 chromadb 原生 SDK）作为向量库后端，
     使用 :func:`~backend.llm.openai_client.get_embeddings` 提供的 OpenAI Embedding
@@ -205,7 +205,7 @@ class ChromaStore:
 
     主要功能：
 
-    * ``ingest_pdf``    ——  一键完成 PDF → 向量库全流程
+    * ``ingest``        ——  一键完成 EPUB → 向量库全流程
     * ``ingest_chunks`` ——  直接写入已处理好的 :class:`~backend.rag.chunker.text_chunker.TextChunk`
     * ``delete_source`` ——  按来源文件路径删除所有关联 chunk
     * ``similarity_search`` / ``as_retriever`` ——  语义检索接口
@@ -215,8 +215,8 @@ class ChromaStore:
         store = ChromaStore(collection_name="kant")
 
         # 一键入库
-        result = store.ingest_pdf("data/books/kant.pdf")
-        print(result)   # [kant] kant.pdf → 总计 312 块，写入 312，跳过 0
+        result = store.ingest("data/books/kant.epub")
+        print(result)   # [kant] kant.epub → 总计 312 块，写入 312，跳过 0
 
         # 语义检索
         docs = store.similarity_search("什么是纯粹理性？", k=5)
@@ -254,41 +254,33 @@ class ChromaStore:
     # 公开：写入接口
     # ------------------------------------------------------------------
 
-    def ingest_pdf(
+    def ingest(
         self,
         path: str | Path,
         *,
-        start_page: int = 1,
-        end_page: int | None = None,
         collection_name: str | None = None,
     ) -> IngestResult:
         """
-        PDF 全流水线入库：提取 → 清洗 → 切块 → 向量化 → 写入 Chroma。
+        EPUB 全流水线入库：提取 → 清洗 → 切块 → 向量化 → 写入 Chroma。
 
-        :param path:            PDF 文件路径
-        :param start_page:      起始页（1-based，含）
-        :param end_page:        结束页（1-based，含），None 表示到末页
+        :param path:            EPUB 文件路径
         :param collection_name: 覆盖初始化时设置的 collection，None 则使用默认值
         """
         path = Path(path)
         logger.info("开始入库流水线：%s", path.name)
 
-        # 1. 提取
-        extractor = PDFExtractor(path)
-        pdf_content = extractor.extract(start_page=start_page, end_page=end_page)
-        logger.debug("  ✓ 提取完成，共 %d 页", len(pdf_content.pages))
+        extractor = EpubExtractor(path)
+        book_content = extractor.extract()
+        logger.debug("  ✓ 提取完成，共 %d 章节", len(book_content.sections))
 
-        # 2. 清洗
         cleaner = TextCleaner(self.clean_config)
-        cleaned = cleaner.clean_content(pdf_content)
+        cleaned = cleaner.clean_content(book_content)
         logger.debug("  ✓ 清洗完成")
 
-        # 3. 切块
         chunker = TextChunker(self.chunk_config)
         chunks = chunker.chunk_content(cleaned)
         logger.debug("  ✓ 切块完成，共 %d 个 chunk", len(chunks))
 
-        # 4. 写入向量库
         db = self._resolve_db(collection_name)
         result = self._ingest_chunks_to_db(chunks, db, source=str(path))
         logger.info("  ✓ 入库完成：%s", result)
@@ -476,10 +468,10 @@ class ChromaStore:
                 "chunk_id": chunk.chunk_id,
                 "char_count": chunk.char_count,
                 "source": meta.source,
-                "page_numbers": _PAGE_SEP.join(str(p) for p in meta.page_numbers),
+                "section_indices": _PAGE_SEP.join(str(i) for i in meta.section_indices),
                 "chunk_index": meta.chunk_index,
-                "pdf_title": meta.pdf_title,
-                "pdf_author": meta.pdf_author,
+                "book_title": meta.book_title,
+                "author": meta.author,
                 "chapter_title": getattr(meta, "chapter_title", "") or "",
                 "section_title": getattr(meta, "section_title", "") or "",
             },
