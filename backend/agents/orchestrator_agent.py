@@ -15,6 +15,7 @@ from backend.agents.note_agent import NoteAgent, notes_node
 from backend.agents.reading_plan_agent import ReadingPlanAgent, plan_node
 from backend.agents.recommendation_agent import RecommendationAgent, recommend_node
 from backend.llm.openai_client import get_llm
+from backend.memory.mem0_store import Mem0Store
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.security.input_filter import InputSafetyResult, run_input_safety_check
 
@@ -29,6 +30,7 @@ class GraphDeps:
     notes_agent: NoteAgent
     plan_agent: ReadingPlanAgent
     recommend_agent: RecommendationAgent
+    mem0: Mem0Store | None = None
 
 
 class GraphState(TypedDict, total=False):
@@ -59,6 +61,9 @@ class GraphState(TypedDict, total=False):
     plan_book_source: str | None
 
     recommend_query: str
+
+    # 记忆上下文（由 memory_search 节点写入，子 Agent 只读）
+    memory_context: str
 
     # 输出
     answer: str
@@ -186,13 +191,7 @@ def supervisor_node(state: GraphState) -> GraphState:
     return state
 
 
-def finalize_node(state: GraphState) -> GraphState:
-    print("[Graph] → finalize_node", file=sys.stdout)
-    state["next"] = "end"
-    return state
-
-
-def build_minimal_supervisor_graph(*, store: ChromaStore | None = None):
+def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_memory: bool = True):
     """
     构建 supervisor 编排图：
 
@@ -203,12 +202,37 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None):
         settings = get_settings()
         store = ChromaStore(collection_name=settings.chroma_database)
 
+    mem0 = Mem0Store() if enable_memory else None
+
     deps = GraphDeps(
         deepread_agent=DeepReadAgent(store=store),
         notes_agent=NoteAgent(store=store),
         plan_agent=ReadingPlanAgent(store=store),
         recommend_agent=RecommendationAgent(store=store),
+        mem0=mem0,
     )
+
+    def _memory_search(state: GraphState) -> GraphState:
+        """每次请求开始时，从 Mem0 检索历史记忆写入 state。"""
+        print("[Graph] → memory_search_node", file=sys.stdout)
+        if deps.mem0 is None:
+            state["memory_context"] = ""
+            return state
+        user_input = state.get("user_input", "") or ""
+        past = deps.mem0.search(user_input, top_k=3)
+        state["memory_context"] = "\n".join(f"- {m}" for m in past) if past else ""
+        if past:
+            print(f"[Memory] 找到 {len(past)} 条历史记忆", file=sys.stdout)
+        return state
+
+    def _finalize(state: GraphState) -> GraphState:
+        """回答完成后，把本次问答存入 Mem0 长期记忆。"""
+        print("[Graph] → finalize_node", file=sys.stdout)
+        if deps.mem0 and state.get("answer") and state.get("user_input"):
+            deps.mem0.add_qa(state["user_input"], state["answer"])
+            print("[Memory] 已保存本次问答到 Mem0", file=sys.stdout)
+        state["next"] = "end"
+        return state
 
     def _deepread(state: GraphState) -> GraphState:
         print("[Graph] → deepread_node", file=sys.stdout)
@@ -255,14 +279,16 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None):
         return state
 
     graph = StateGraph(GraphState)
+    graph.add_node("memory_search", _memory_search)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("deepread", _deepread)
     graph.add_node("notes", _notes)
     graph.add_node("plan", _plan)
     graph.add_node("recommend", _recommend)
-    graph.add_node("finalize", finalize_node)
+    graph.add_node("finalize", _finalize)
 
-    graph.add_edge(START, "supervisor")
+    graph.add_edge(START, "memory_search")
+    graph.add_edge("memory_search", "supervisor")
     graph.add_conditional_edges(
         "supervisor",
         lambda s: s.get("next", "deepread"),

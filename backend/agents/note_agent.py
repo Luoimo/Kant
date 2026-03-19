@@ -58,6 +58,7 @@ class NoteAgent:
         query: str,
         book_source: str | None = None,
         raw_text: str | None = None,
+        memory_context: str = "",
     ) -> NoteResult:
         # 路径 1：有 RAG（book_source 指定时）
         if book_source or (not raw_text):
@@ -78,12 +79,12 @@ class NoteAgent:
                     retrieved_docs=[],
                 )
 
-            answer = self._synthesize_notes(query, docs, raw_text)
+            answer = self._synthesize_notes(query, docs, raw_text, memory_context=memory_context)
             return NoteResult(answer=answer, citations=citations, retrieved_docs=docs)
 
         # 路径 2：纯文本整理（raw_text，无 RAG）
         print(f"[NoteAgent] raw_text mode, len={len(raw_text)}", file=sys.stdout)
-        answer = self._synthesize_notes(query, [], raw_text)
+        answer = self._synthesize_notes(query, [], raw_text, memory_context=memory_context)
         return NoteResult(answer=answer, citations=[], retrieved_docs=[])
 
     def _synthesize_notes(
@@ -91,6 +92,7 @@ class NoteAgent:
         query: str,
         docs: list[Document],
         raw_text: str | None = None,
+        memory_context: str = "",
     ) -> str:
         content_blocks: list[str] = []
 
@@ -120,9 +122,13 @@ class NoteAgent:
 3. 可在末尾添加"待探索问题"小节（可选）。
 4. 只整理实际出现的内容，不要添加书中没有的信息。"""
 
+        system = NOTE_SYSTEM_PROMPT
+        if memory_context:
+            system += "\n\n【用户历史阅读记录（仅供参考）】\n" + memory_context
+
         msg = self.llm.invoke(
             [
-                {"role": "system", "content": NOTE_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ]
         )
@@ -135,7 +141,8 @@ def notes_node(state: dict[str, Any], *, agent: NoteAgent) -> dict[str, Any]:
     book_source: str | None = state.get("notes_book_source") or state.get("book_source")
     raw_text: str | None = state.get("notes_raw_text")
 
-    result = agent.run(query=query, book_source=book_source, raw_text=raw_text)
+    memory_context: str = state.get("memory_context", "") or ""
+    result = agent.run(query=query, book_source=book_source, raw_text=raw_text, memory_context=memory_context)
     return {
         "answer": result.answer,
         "citations": result.citations,

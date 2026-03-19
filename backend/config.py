@@ -8,9 +8,12 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from dotenv import load_dotenv
+
 # 项目根目录（Kant），便于从任意 cwd 加载 .env
 _ROOT = Path(__file__).resolve().parent.parent
-
+# 加载环境变量
+load_dotenv()
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -30,6 +33,10 @@ class Settings(BaseSettings):
     chroma_api_key: str = ""
     chroma_tenant: str = "default_tenant"
     chroma_database: str = "default_database"
+
+    # Mem0 记忆管理
+    mem0_user_id: str = "kant-user"
+    mem0_chroma_collection_name: str = ""
 
 
 def get_settings() -> Settings:

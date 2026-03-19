@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,18 @@ logger = logging.getLogger(__name__)
 
 # Chroma 元数据值只允许 str/int/float/bool，list 需序列化
 _PAGE_SEP = ","
+
+
+def _sanitize_collection_name(title: str) -> str:
+    """
+    将书名转为合法的 Chroma collection 名称。
+
+    统一使用 ``book_{md5前16位}`` 格式，确保：
+    - 无论中英文书名都合法
+    - 同一书名始终映射到同一 collection（稳定唯一）
+    """
+    hash16 = hashlib.md5(title.encode("utf-8")).hexdigest()[:16]
+    return f"book_{hash16}"
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +181,8 @@ class IngestConfig:
     """
     ingest / ingest_chunks 的行为配置。
 
-    skip_existing   : True → 按 chunk_id 去重，已存在的 chunk 跳过（幂等写入）
-    embed_batch_size: 每批次送入 Embedding API 的 chunk 数量，避免超出速率限制
+    skip_existing   : True → collection 已有数据时整本跳过（幂等写入）
+    embed_batch_size: 每批次送入 Embedding API 及 Chroma 的 chunk 数量，避免超出请求限制
     """
     skip_existing: bool = True
     embed_batch_size: int = 100
@@ -264,7 +277,7 @@ class ChromaStore:
         EPUB 全流水线入库：提取 → 清洗 → 切块 → 向量化 → 写入 Chroma。
 
         :param path:            EPUB 文件路径
-        :param collection_name: 覆盖初始化时设置的 collection，None 则使用默认值
+        :param collection_name: 指定 collection 名称；None 则自动取书名（推荐）
         """
         path = Path(path)
         logger.info("开始入库流水线：%s", path.name)
@@ -280,6 +293,12 @@ class ChromaStore:
         chunker = TextChunker(self.chunk_config)
         chunks = chunker.chunk_content(cleaned)
         logger.debug("  ✓ 切块完成，共 %d 个 chunk", len(chunks))
+
+        # 未指定 collection 时，自动以书名作为 collection 名称
+        if collection_name is None:
+            raw_title = book_content.metadata.get("title") or path.stem
+            collection_name = _sanitize_collection_name(raw_title)
+            logger.info("  → collection：%s", collection_name)
 
         db = self._resolve_db(collection_name)
         result = self._ingest_chunks_to_db(chunks, db, source=str(path))
@@ -328,24 +347,29 @@ class ChromaStore:
         query: str,
         k: int = 4,
         filter: dict | None = None,
+        collection_name: str | None = None,
     ) -> list[Document]:
         """
         语义相似度检索，返回 LangChain :class:`~langchain_core.documents.Document` 列表。
 
-        :param query:  查询文本
-        :param k:      返回的最相关 chunk 数量
-        :param filter: Chroma where 过滤条件，例如 ``{"book_title": "Critique of Pure Reason"}``
+        :param query:           查询文本
+        :param k:               返回的最相关 chunk 数量
+        :param filter:          Chroma where 过滤条件，例如 ``{"book_title": "Critique of Pure Reason"}``
+        :param collection_name: 指定查询的 collection；None 则使用默认 collection
         """
-        return self._db.similarity_search(query, k=k, filter=filter)
+        db = self._resolve_db(collection_name)
+        return db.similarity_search(query, k=k, filter=filter)
 
     def similarity_search_with_score(
         self,
         query: str,
         k: int = 4,
         filter: dict | None = None,
+        collection_name: str | None = None,
     ) -> list[tuple[Document, float]]:
         """带相似度分数的检索，分数越低（余弦距离）表示越相关。"""
-        return self._db.similarity_search_with_score(query, k=k, filter=filter)
+        db = self._resolve_db(collection_name)
+        return db.similarity_search_with_score(query, k=k, filter=filter)
 
     def as_retriever(self, **kwargs: Any):
         """
@@ -373,6 +397,30 @@ class ChromaStore:
             "persist_directory": self.persist_directory,
             "total_chunks": count,
         }
+
+    def get_all_documents(
+        self,
+        collection_name: str | None = None,
+        filter: dict | None = None,
+    ) -> list[Document]:
+        """
+        返回 collection 中的所有文档（用于构建 BM25 索引等离线任务）。
+
+        :param collection_name: 指定 collection；None 则使用默认
+        :param filter:          Chroma where 条件，例如 ``{"source": "path/to/book.epub"}``
+        """
+        db = self._resolve_db(collection_name)
+        get_kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
+        if filter:
+            get_kwargs["where"] = filter
+        results = db._collection.get(**get_kwargs)
+        return [
+            Document(page_content=doc, metadata=meta)
+            for doc, meta in zip(
+                results.get("documents") or [],
+                results.get("metadatas") or [],
+            )
+        ]
 
     def list_sources(self) -> list[str]:
         """列出当前 collection 中所有已入库的 PDF 来源路径（去重）。"""
@@ -420,38 +468,37 @@ class ChromaStore:
         source: str,
     ) -> IngestResult:
         """
-        将 TextChunk 列表写入 Chroma，支持去重和分批 Embedding。
+        将 TextChunk 列表写入 Chroma，支持跳过已有 collection 和分批 Embedding。
         """
         cfg = self.ingest_config
         total = len(chunks)
 
-        # 去重：查询已存在的 chunk_id，跳过重复写入
-        existing_ids: set[str] = set()
-        if cfg.skip_existing and chunks:
-            existing = db._collection.get(
-                ids=[c.chunk_id for c in chunks],
-                include=[],
+        # 去重：collection 已有数据则整本跳过（每本书独立 collection，无需逐条比对）
+        if cfg.skip_existing and db._collection.count() > 0:
+            logger.info("  → collection 已存在数据，跳过入库")
+            return IngestResult(
+                source=source,
+                total_chunks=total,
+                added=0,
+                skipped=total,
+                collection_name=db._collection.name,
             )
-            existing_ids = set(existing.get("ids") or [])
-
-        new_chunks = [c for c in chunks if c.chunk_id not in existing_ids]
-        skipped = total - len(new_chunks)
 
         # 分批写入
         added = 0
-        for i in range(0, len(new_chunks), cfg.embed_batch_size):
-            batch = new_chunks[i: i + cfg.embed_batch_size]
+        for i in range(0, len(chunks), cfg.embed_batch_size):
+            batch = chunks[i: i + cfg.embed_batch_size]
             documents = [self._chunk_to_document(c) for c in batch]
             ids = [c.chunk_id for c in batch]
             db.add_documents(documents=documents, ids=ids)
             added += len(batch)
-            logger.debug("  写入进度：%d / %d", added, len(new_chunks))
+            logger.debug("  写入进度：%d / %d", added, total)
 
         return IngestResult(
             source=source,
             total_chunks=total,
             added=added,
-            skipped=skipped,
+            skipped=0,
             collection_name=db._collection.name,
         )
 

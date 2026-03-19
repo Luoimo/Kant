@@ -38,3 +38,9 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# claude
+.claude
+
+# cursor
+.cursor

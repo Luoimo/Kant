@@ -52,7 +52,7 @@ class ReadingPlanAgent:
         self.llm = llm or get_llm(temperature=0.4)
         self.k = k
 
-    def run(self, *, query: str, book_source: str | None = None) -> ReadingPlanResult:
+    def run(self, *, query: str, book_source: str | None = None, memory_context: str = "") -> ReadingPlanResult:
         # 获取书库中的可用书目
         available_sources: list[str] = []
         try:
@@ -77,7 +77,7 @@ class ReadingPlanAgent:
             file=sys.stdout,
         )
 
-        answer = self._generate_plan(query, docs, available_sources, book_source)
+        answer = self._generate_plan(query, docs, available_sources, book_source, memory_context=memory_context)
         return ReadingPlanResult(answer=answer, citations=citations, retrieved_docs=docs)
 
     def _generate_plan(
@@ -86,6 +86,7 @@ class ReadingPlanAgent:
         docs: list[Document],
         available_sources: list[str],
         book_source: str | None,
+        memory_context: str = "",
     ) -> str:
         context_parts: list[str] = []
 
@@ -122,9 +123,13 @@ class ReadingPlanAgent:
 计划要包含：阅读目标、书单/章节安排、每日或每周时间表、阅读建议。
 时间估算应合理，不要过于乐观。"""
 
+        system = PLAN_SYSTEM_PROMPT
+        if memory_context:
+            system += "\n\n【用户历史阅读记录（仅供参考）】\n" + memory_context
+
         msg = self.llm.invoke(
             [
-                {"role": "system", "content": PLAN_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ]
         )
@@ -136,7 +141,8 @@ def plan_node(state: dict[str, Any], *, agent: ReadingPlanAgent) -> dict[str, An
     query: str = state.get("plan_query", "") or state.get("user_input", "")
     book_source: str | None = state.get("plan_book_source") or state.get("book_source")
 
-    result = agent.run(query=query, book_source=book_source)
+    memory_context: str = state.get("memory_context", "") or ""
+    result = agent.run(query=query, book_source=book_source, memory_context=memory_context)
     return {
         "answer": result.answer,
         "citations": result.citations,

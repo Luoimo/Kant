@@ -50,7 +50,7 @@ class RecommendationAgent:
         self.llm = llm or get_llm(temperature=0.5)
         self.k = k
 
-    def run(self, *, query: str) -> RecommendationResult:
+    def run(self, *, query: str, memory_context: str = "") -> RecommendationResult:
         # 用偏好 query 检索相关 chunks，提取书名/作者等元数据
         docs = self.store.similarity_search(query, k=self.k)
         citations = build_citations(docs)
@@ -67,10 +67,10 @@ class RecommendationAgent:
                 retrieved_docs=[],
             )
 
-        answer = self._generate_recommendations(query, docs)
+        answer = self._generate_recommendations(query, docs, memory_context=memory_context)
         return RecommendationResult(answer=answer, citations=citations, retrieved_docs=docs)
 
-    def _generate_recommendations(self, query: str, docs: list[Document]) -> str:
+    def _generate_recommendations(self, query: str, docs: list[Document], memory_context: str = "") -> str:
         # 从元数据中提取书名、作者，去重
         seen_titles: set[str] = set()
         book_infos: list[str] = []
@@ -106,9 +106,13 @@ class RecommendationAgent:
 只推荐上面列出的书库中实际存在的书籍，每本书给出推荐理由、难度和阅读建议。
 如果书库中没有足够相关的书籍，请如实说明并给出有限的推荐。"""
 
+        system = RECOMMEND_SYSTEM_PROMPT
+        if memory_context:
+            system += "\n\n【用户历史阅读记录（仅供参考）】\n" + memory_context
+
         msg = self.llm.invoke(
             [
-                {"role": "system", "content": RECOMMEND_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ]
         )
@@ -119,7 +123,8 @@ def recommend_node(state: dict[str, Any], *, agent: RecommendationAgent) -> dict
     """节点函数：读取 recommend_query，写回 answer/citations/retrieved_docs_count。"""
     query: str = state.get("recommend_query", "") or state.get("user_input", "")
 
-    result = agent.run(query=query)
+    memory_context: str = state.get("memory_context", "") or ""
+    result = agent.run(query=query, memory_context=memory_context)
     return {
         "answer": result.answer,
         "citations": result.citations,
