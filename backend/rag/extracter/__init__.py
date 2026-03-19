@@ -1,16 +1,16 @@
 # _*_ coding:utf-8 _*_
-from .pdf_extractor import (
-    PDFExtractor,
-    PageContent,
-    PDFContent,
+from .epub_extractor import (
+    EpubExtractor,
+    SectionContent,
+    BookContent,
     TOCEntry,
-    build_page_section_map,
+    build_section_map,
 )
 
 __all__ = [
-    "PDFExtractor",
-    "PageContent",
-    "PDFContent",
+    "EpubExtractor",
+    "SectionContent",
+    "BookContent",
     "TOCEntry",
-    "build_page_section_map",
+    "build_section_map",
 ]
