@@ -345,9 +345,9 @@ def run(
 ) -> NoteResult: ...
 ```
 
-`notes_node()` reads `storage_path` from state before calling `run()`:
+`notes_node()` reads `storage_path` from state before calling `run()`. It accepts `deps` and `thread_id` passed in by the `_notes` closure (see Section 3 finalize pattern):
 ```python
-def notes_node(state, *, agent):
+def notes_node(state, *, agent, deps, thread_id) -> dict:
     last = state.get("notes_last_output") or {}
     return agent.run(
         ...,
@@ -485,7 +485,7 @@ return {
     "answer": result.answer,
     "citations": result.citations,
     "retrieved_docs_count": len(result.retrieved_docs),
-    "recommend_last_docs": [d.dict() for d in result.retrieved_docs],
+    "recommend_last_docs": [d.model_dump() for d in result.retrieved_docs],
     "recommend_last_turn_index": state.get("current_turn_index") or 0,
     "recommend_messages": [AIMessage(content=result.answer)],
 }
@@ -516,9 +516,9 @@ def run(
 ) -> ReadingPlanResult: ...
 ```
 
-`plan_node()` reads `storage_path` and `plan_progress` from state before calling `run()`:
+`plan_node()` reads `storage_path` and `plan_progress` from state before calling `run()`. It accepts `deps` and `thread_id` passed in by the `_plan` closure (same pattern as `notes_node`):
 ```python
-def plan_node(state, *, agent):
+def plan_node(state, *, agent, deps, thread_id) -> dict:
     last = state.get("plan_last_output") or {}
     return agent.run(
         ...,
@@ -575,7 +575,7 @@ return {
         created_at=datetime.utcnow().isoformat(),
         progress_summary=f"{len(plan_progress or [])} sections completed",
     ),
-    "plan_last_docs": [d.dict() for d in result.retrieved_docs],
+    "plan_last_docs": [d.model_dump() for d in result.retrieved_docs],
     "plan_last_turn_index": state.get("current_turn_index") or 0,
     "plan_messages": [AIMessage(content=content)],
     # Append newly completed section if this was a progress update:
@@ -604,7 +604,7 @@ return {
 
 ```
 Agent node finishes:
-  patch["deepread_last_docs"] = [d.dict() for d in docs]   # JSON-safe
+  patch["deepread_last_docs"] = [d.model_dump() for d in docs]   # JSON-safe
   patch["deepread_last_turn_index"] = current_turn_index
 
 Supervisor detects cross-agent (fresh):
