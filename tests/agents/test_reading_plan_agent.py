@@ -148,6 +148,15 @@ class TestPlanNodeStorage:
         storage.update.assert_called_once_with("existing-page-id", mock_llm.invoke.return_value.content)
         storage.save.assert_not_called()
 
+    def test_extend_action_calls_update_when_storage_path_exists(self, mock_store, mock_llm):
+        storage = MagicMock()
+        storage.load.return_value = "## Old Plan"
+        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
+        state = self._make_state(action="extend", storage_path="existing-page-id")
+        plan_node(state, agent=agent)
+        storage.update.assert_called_once_with("existing-page-id", mock_llm.invoke.return_value.content)
+        storage.save.assert_not_called()
+
     def test_save_failure_does_not_raise(self, mock_store, mock_llm):
         storage = MagicMock()
         storage.save.side_effect = ConnectionError("Notion down")
