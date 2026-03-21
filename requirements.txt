@@ -13,6 +13,7 @@ lxml>=5.0
 
 # 记忆管理
 mem0ai>=0.1.0
+notion-client>=2.2.2
 
 # 混合检索
 rank_bm25>=0.2.2
