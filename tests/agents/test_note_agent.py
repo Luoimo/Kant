@@ -88,6 +88,23 @@ class TestNoteAgentRawTextPath:
         store.similarity_search_with_score.assert_not_called()
 
 
+class TestNoteAgentLoadDegradation:
+    def test_load_failure_degrades_to_new(self, mock_store, mock_llm):
+        """If load() raises, agent must not propagate the exception — degrades to 'new'."""
+        failing_storage = MagicMock()
+        failing_storage.load.side_effect = ConnectionError("Notion unavailable")
+
+        agent = NoteAgent(store=mock_store, llm=mock_llm, note_storage=failing_storage)
+        # Should not raise — must return a NoteResult even when load fails
+        result = agent.run(
+            query="修改笔记",
+            action="edit",
+            storage_path="some-page-id",
+        )
+        assert isinstance(result, NoteResult)
+        assert result.answer  # some content was generated
+
+
 class TestNotesNode:
     def test_notes_node_reads_state_fields(self, mock_store, mock_llm):
         agent = NoteAgent(store=mock_store, llm=mock_llm)

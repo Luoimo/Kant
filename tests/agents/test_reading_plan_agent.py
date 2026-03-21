@@ -82,6 +82,21 @@ class TestReadingPlanAgent:
         assert result.citations == []
 
 
+class TestReadingPlanAgentLoadDegradation:
+    def test_load_failure_degrades_to_new(self, mock_store, mock_llm):
+        failing_storage = MagicMock()
+        failing_storage.load.side_effect = ConnectionError("Notion unavailable")
+
+        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=failing_storage)
+        result = agent.run(
+            query="修改计划",
+            action="edit",
+            storage_path="some-page-id",
+        )
+        assert isinstance(result, ReadingPlanResult)
+        assert result.answer
+
+
 class TestPlanNode:
     def test_plan_node_reads_state_fields(self, mock_store, mock_llm):
         agent = ReadingPlanAgent(store=mock_store, llm=mock_llm)

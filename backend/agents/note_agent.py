@@ -92,17 +92,21 @@ class NoteAgent:
         if action in ("edit", "extend") and not storage_path:
             action = "new"
 
-        # 路径 1：edit/extend — 加载已有笔记
+        # 路径 1：edit/extend — 加载已有笔记（load 失败时降级为 new）
         if action in ("edit", "extend") and storage_path and self.note_storage:
-            existing_note = self.note_storage.load(storage_path)
-            return self._modify_note(
-                query=query,
-                existing_note=existing_note,
-                action=action,
-                notes_format=notes_format,
-                memory_context=memory_context,
-                notes_messages=notes_messages,
-            )
+            try:
+                existing_note = self.note_storage.load(storage_path)
+                return self._modify_note(
+                    query=query,
+                    existing_note=existing_note,
+                    action=action,
+                    notes_format=notes_format,
+                    memory_context=memory_context,
+                    notes_messages=notes_messages,
+                )
+            except Exception as e:
+                print(f"[NoteAgent] load failed, degrading to new: {e}", file=sys.stdout)
+                action = "new"
 
         # 路径 2：raw_text-only（无 book_source，跳过检索）
         if raw_text and not book_source:

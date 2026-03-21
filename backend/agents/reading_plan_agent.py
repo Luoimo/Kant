@@ -130,18 +130,22 @@ class ReadingPlanAgent:
         if action in ("edit", "extend") and not storage_path:
             action = "new"
 
-        # 路径 1：edit/extend — 加载已有计划并修改
+        # 路径 1：edit/extend — 加载已有计划并修改（load 失败时降级为 new）
         if action in ("edit", "extend") and storage_path and self.plan_storage:
-            existing_plan = self.plan_storage.load(storage_path)
-            return self._modify_plan(
-                query=query,
-                existing_plan=existing_plan,
-                action=action,
-                plan_type=plan_type,
-                memory_context=memory_context,
-                plan_messages=plan_messages,
-                plan_progress=plan_progress,
-            )
+            try:
+                existing_plan = self.plan_storage.load(storage_path)
+                return self._modify_plan(
+                    query=query,
+                    existing_plan=existing_plan,
+                    action=action,
+                    plan_type=plan_type,
+                    memory_context=memory_context,
+                    plan_messages=plan_messages,
+                    plan_progress=plan_progress,
+                )
+            except Exception as e:
+                print(f"[ReadingPlanAgent] load failed, degrading to new: {e}", file=sys.stdout)
+                action = "new"
 
         # 路径 2：new — 检索 + 生成
         return self._generate_new_plan(
