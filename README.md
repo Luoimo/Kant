@@ -1,189 +1,182 @@
-## 项目说明（Kant RAG Demo）
+# Kant — 读书 AI 助手
 
-本项目是一个基于 **OpenAI + Chroma** 的本地 RAG（Retrieval-Augmented Generation）示例，支持：
-
-- **本地 Chroma 向量库**（默认，落盘到 `data/chroma`）
-- **Chroma Cloud 模式**（使用官方托管向量库，通过 API Key 访问）
-
-下面说明如何配置 `.env`，以及当前 RAG 的整体流程与运行方式。
+基于 **OpenAI + ChromaDB + LangGraph** 构建的本地读书 Agent 系统，支持 EPUB 书籍的全流程 RAG 问答、笔记整理、推荐和阅读计划。
 
 ---
 
-## 一、环境与依赖
+## 架构概览
 
-- Python 3.10+（建议）
-- 已创建虚拟环境并安装依赖：
+```
+EPUB → EpubExtractor → TextCleaner → TextChunker → OpenAI Embeddings → ChromaDB
+                                                                           ↓
+用户问题 → FastAPI /chat → OrchestratorAgent (LangGraph)
+                               ├─ Mem0 记忆检索
+                               ├─ 安全过滤 (InputSafetyFilter)
+                               ├─ 意图识别 (LLM 结构化输出，支持 compound_intents)
+                               └─ 路由到子 Agent（可多 Agent 串联）：
+                                   ├─ DeepReadAgent      (精读 / 问答)
+                                   ├─ NoteAgent          (笔记整理，含持久化)
+                                   ├─ ReadingPlanAgent   (阅读计划，含持久化)
+                                   └─ RecommendationAgent (书籍推荐)
+```
+
+---
+
+## 目录结构
+
+```
+backend/
+  agents/          LangGraph Agent 系统（orchestrator + 4 个子 Agent）
+  api/chat.py      FastAPI 入口（POST /chat）
+  llm/             OpenAI LLM & Embeddings 封装
+  memory/          Mem0 长期记忆
+  rag/
+    chroma/        ChromaStore（向量库管理）
+    chunker/       文本切块
+    cleaner/       文本清洗
+    extracter/     EPUB 提取
+    retriever/     混合检索（BM25 + 向量 + 重排）
+  security/        InputSafetyFilter 安全过滤
+  storage/         笔记 / 阅读计划持久化（NoteStorage / PlanStorage）
+  xai/             Citation 引用构建
+data/
+  chroma/          ChromaDB 向量库（本地模式）
+  books/           EPUB 书库
+  notes/           笔记 Markdown 文件（LocalNoteStorage 默认目录）
+  plans/           阅读计划 Markdown 文件（LocalPlanStorage 默认目录）
+  checkpoints.db   LangGraph SqliteSaver 会话检查点
+scripts/
+  rag_demo.py      端到端 RAG Demo
+  deepread_graph_demo.py  LangGraph Agent 演示
+```
+
+---
+
+## 快速开始
+
+### 1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-项目根目录结构（节选）：
-
-- `backend/config.py`：读取 `.env` 的配置中心
-- `backend/llm/openai_client.py`：OpenAI LLM & Embeddings 封装
-- `backend/rag/chroma/chroma_store.py`：向量库管理（Chroma 包装）
-- `backend/rag/extracter/`：PDF 文本抽取
-- `backend/rag/cleaner/`：文本清洗
-- `backend/rag/chunker/`：文本切块
-- `scripts/rag_demo.py`：端到端 RAG Demo 脚本
-
----
-
-## 二、`.env` 配置说明
-
-根目录已有一个 `.env` 模板，关键字段如下（**请根据自己环境修改**）：
+### 2. 配置 `.env`
 
 ```env
-# OpenAI（必填）
-OPENAI_API_KEY=你的_openai_api_key
+OPENAI_API_KEY=sk-xxxxx
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
-# 本地向量库目录
 CHROMA_PERSIST_DIR=data/chroma
 BOOKS_DATA_DIR=data/books
 
-# Chroma Cloud（可选：填了就走 CloudClient，留空则使用本地 PersistentClient）
-CHROMA_API_KEY=你的_chroma_api_key
-CHROMA_TENANT=你的_tenant_id
-CHROMA_DATABASE=你的_database_name
+# Chroma Cloud（留空则使用本地模式）
+CHROMA_API_KEY=
+CHROMA_TENANT=default_tenant
+CHROMA_DATABASE=default_database
+
+# Mem0 记忆用户 ID
+MEM0_USER_ID=default_user
+
+# 笔记 / 阅读计划持久化目录
+NOTE_STORAGE_DIR=data/notes
+PLAN_STORAGE_DIR=data/plans
 ```
 
-### 1. OpenAI 配置
+### 3. 入库 EPUB
 
-- `OPENAI_API_KEY`：从 OpenAI 控制台获取的 API Key。
-- `OPENAI_BASE_URL`：如使用代理或自建网关，可改为对应地址。
-- `OPENAI_MODEL`：对话 / 推理模型名称。
-- `OPENAI_EMBEDDING_MODEL`：Embedding 模型名称，用于向量化文本。
-
-> 所有这些字段由 `backend/llm/openai_client.py` 统一读取。
-
-### 3. Chroma Cloud 模式
-
-如需使用 **Chroma Cloud**：
-
-1. 在 Chroma Cloud 后台创建：
-   - 一个 Tenant（tenant id）
-   - 一个 Database（database name）
-   - 一个 API Key
-2. 在 `.env` 中填入：
-
-```env
-CHROMA_API_KEY=ck_xxx           # 必填：Cloud API Key
-CHROMA_TENANT=xxxx-tenant-id    # 必填：Tenant ID
-CHROMA_DATABASE=Kant            # 必填：Database 名称
-```
-
-此时 `backend/rag/chroma/chroma_store.py` 内部会自动选择：
-
-- `chromadb.CloudClient(tenant=..., database=..., api_key=...)`
-
-而 `collection_name` 默认设置为 `CHROMA_DATABASE`，便于 Cloud / 本地统一管理。
-
----
-
-## 三、当前 RAG 流程概览
-
-核心流程由 `ChromaStore` 负责（`backend/rag/chroma/chroma_store.py`）：
-
-1. **PDF 提取（Extract）**
-   - 使用 `PDFExtractor` 读取 `BOOKS_DATA_DIR` 中的 PDF。
-   - 输出 `PDFContent`，包含每页的文本与元信息（标题、作者等）。
-
-2. **文本清洗（Clean）**
-   - `TextCleaner` 根据 `CleanConfig`：去除页眉页脚、图片块、过短块等噪声。
-   - 输出结构化的 `CleanedContent`。
-
-3. **文本切块（Chunk）**
-   - `TextChunker` 根据 `ChunkConfig`（如 `chunk_size`、`chunk_overlap`）进行分段。
-   - 每个 Chunk 对应一个 `TextChunk`，带有：
-     - `chunk_id`（基于内容的哈希）
-     - `source`（PDF 路径）
-     - `page_numbers`（涉及页码）
-     - `pdf_title` / `pdf_author` 等元数据。
-
-4. **向量化 & 入库（Embed & Ingest）**
-   - 使用 `get_embeddings()` 调用 OpenAI Embeddings，将 Chunk 文本向量化。
-   - 调用 `ChromaStore._ingest_chunks_to_db()`：
-     - 支持 **按 `chunk_id` 去重**（`skip_existing=True`）；
-     - 支持 **分批写入**（`embed_batch_size` 控制）。
-   - 元数据写入 Chroma / Chroma Cloud，对应 collection 中的 metadatas。
-
-5. **检索（Retrieve）**
-   - `similarity_search(query, k, filter)`：返回最相似的 k 个 `Document`。
-   - `similarity_search_with_score`：同时返回距离分数。
-   - `as_retriever(...)`：返回 LangChain 兼容的 Retriever，可直接接入 Chain / Agent。
-
-> 目前 Demo 仅做检索和结果打印；你可以在此基础上增加一个 LLM，将检索结果拼接成 RAG 回答。
-
----
-
-## 四、运行 RAG Demo
-
-Demo 脚本：`scripts/rag_demo.py`
-
-### 1. 准备数据
-
-将你的 PDF 放到：
-
-```text
-data/books/
-```
-
-如目录不存在，可以手动创建，或在代码中修改 `BOOKS_DATA_DIR`。
-
-### 2. 首次入库（Ingest）
-
-在 `scripts/rag_demo.py` 中，默认 `ingest_books` 是注释掉的：
-
-```python
-def main() -> None:
-    project_root = Path(__file__).resolve().parent.parent
-    books_dir = project_root / "data" / "books"
-
-    store = build_store()
-
-    # 首次运行时取消注释以写入数据；后续查询无需重复写入（skip_existing=True）
-    # ingest_books(store, books_dir)
-
-    run_query(store, "克尔凯郭尔对焦虑的定义是什么？", k=5)
-    run_query(store, "克尔凯郭尔的父亲是个怎样的人？", k=5)
-```
-
-**第一次运行时**：
-
-1. 取消注释 `ingest_books(store, books_dir)`。
-2. 执行：
+将 `.epub` 文件放入 `data/books/`，然后在 `scripts/rag_demo.py` 中取消注释 `ingest_books`，运行：
 
 ```bash
 python -m scripts.rag_demo
 ```
 
-写入完成后，可以再把 `ingest_books` 注释回去，避免重复入库。
-
-### 3. 检索测试（Query）
-
-只保留两行 `run_query`，再次执行：
+### 4. 启动 API
 
 ```bash
-python -m scripts.rag_demo
+uvicorn backend.main:app --reload
 ```
 
-终端会打印若干命中结果，包括：
+POST `http://localhost:8000/chat`：
 
-- 来源文件 `source`
-- 页码 `page_numbers`
-- `chunk_index`
-- 书名 `pdf_title`
-- 作者 `pdf_author`
-- 截断后的内容片段
+```json
+{
+  "query": "克尔凯郭尔如何定义焦虑？",
+  "book_source": null,
+  "thread_id": "session-1"
+}
+```
 
 ---
 
-## 五、安全注意事项
+## 核心模块说明
 
-- `.env` 中包含 **OpenAI / Chroma API Key**，已经在 `.gitignore` 中忽略，**不要手动提交**。
-- 如果要分享项目，请仅分享代码和示例配置（可以提供 `.env.example`），不要分享真实凭据。
+### RAG 流水线
 
+`ChromaStore` 是唯一入口，负责编排：
+
+1. **EpubExtractor** — 提取 EPUB 章节文本与元数据
+2. **TextCleaner** — 去除页眉页脚、噪声块
+3. **TextChunker** — 按 `chunk_size` / `chunk_overlap` 切块，带 `chunk_id`（内容哈希）去重
+4. **OpenAI Embeddings** — 批量向量化，写入 ChromaDB
+
+检索方法：
+- `similarity_search(query, k, filter)` — 纯向量检索
+- `as_retriever()` — LangChain 兼容 Retriever
+
+`backend/rag/retriever/` 提供混合检索组件：BM25 + 向量 RRF 融合、QueryRewriter（查询改写）、LLMReranker / CrossEncoderReranker（重排序）。**所有四个子 Agent 均使用 `HybridRetriever`**，在构造时一次性初始化。
+
+### Agent 系统
+
+基于 LangGraph Supervisor 模式，图结构：
+
+```
+START → memory_search → supervisor → [agent(s)] → supervisor → finalize → END
+```
+
+- **memory_search** — 从 Mem0 检索历史记忆，注入 `memory_context`
+- **supervisor** — 安全过滤 → 意图识别（支持 `compound_intents` 多 Agent 串联）→ 路由
+- **DeepReadAgent** — 精读问答，HybridRetriever 检索 top-k 文档，构建 `Citation`，可选一致性自检
+- **NoteAgent** — 4 种格式（structured / summary / qa / timeline），支持 new / edit / extend，笔记持久化到 `data/notes/`
+- **RecommendationAgent** — hash 缓存书目，多轮去重推荐，带评级和阅读建议
+- **ReadingPlanAgent** — 从 ChromaDB 提取真实章节结构，计算阅读时长，支持进度更新，计划持久化到 `data/plans/`
+- **finalize** — 多 Agent 串联时合成统一回答；将本轮问答存入 Mem0 长期记忆
+
+**多轮对话：** `thread_id` 隔离会话，`SqliteSaver`（`data/checkpoints.db`）持久化检查点，每个 Agent 维护独立的消息历史（`*_messages`）。
+
+### 持久化存储
+
+`backend/storage/` 提供可插拔的文件存储：
+
+- `LocalNoteStorage` — 笔记 Markdown 文件，存储于 `NOTE_STORAGE_DIR`（默认 `data/notes/`）
+- `LocalPlanStorage` — 阅读计划 Markdown 文件，存储于 `PLAN_STORAGE_DIR`（默认 `data/plans/`）
+- 均实现 `Protocol`（runtime-checkable），可替换为自定义后端
+- 操作：`save` / `load` / `list` / `delete`，文件名使用 `note_id` / `plan_id` + `.md` 后缀
+
+### Chroma 双模式
+
+- `CHROMA_API_KEY` 为空 → `PersistentClient`（本地落盘）
+- `CHROMA_API_KEY` 非空 → `CloudClient`（Chroma Cloud）
+
+### 安全层
+
+`InputSafetyFilter` 硬阻断：API Key 泄露、文件系统命令、提示词注入、代码执行关键词。软警告：非阅读相关查询。
+
+---
+
+## 测试
+
+```bash
+pytest tests/ -v
+pytest tests/rag/test_chroma_store.py -v
+pytest tests/ --cov=backend --cov-report=html
+```
+
+所有单元测试使用内存 fixture，无需真实 PDF/EPUB 或 API 调用。
+
+---
+
+## 安全
+
+`.env` 已在 `.gitignore` 中忽略。分享项目时只提供 `.env.example`，不要提交真实凭据。

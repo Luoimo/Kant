@@ -61,7 +61,7 @@ class NoteAgent:
     ) -> None:
         if store is None:
             settings = get_settings()
-            store = ChromaStore(collection_name=settings.chroma_database)
+            store = ChromaStore()
 
         self.store = store
         self.llm = llm or get_llm(temperature=0.3)

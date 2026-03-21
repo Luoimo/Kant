@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>存在与虚无 · 精读模式 · Kant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --accent: #c47c3e;
+  --accent-light: #faebd7;
+  --accent-dim: rgba(196,124,62,0.12);
+  --blue: #4a7bbf;
+  --text: #1a1a2e;
+  --text-muted: #8892a4;
+  --border: #e4ddd2;
+  --shadow: 0 4px 24px rgba(26,26,46,0.08);
+  --radius: 12px;
+  --font-ui: 'Inter', -apple-system, sans-serif;
+  --font-serif: 'Noto Serif SC', Georgia, serif;
+  --highlight-yellow: rgba(255, 214, 80, 0.45);
+  --highlight-active: rgba(196,124,62,0.35);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; font-family: var(--font-ui); color: var(--text); overflow: hidden; }
+
+/* ── Top Nav ── */
+.top-nav {
+  height: 52px; background: #18192b; display: flex; align-items: center;
+  padding: 0 16px; gap: 12px; flex-shrink: 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.back-btn {
+  color: rgba(240,235,224,0.6); text-decoration: none; font-size: 13px;
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border-radius: 7px; transition: background 0.15s;
+}
+.back-btn:hover { background: rgba(255,255,255,0.08); color: #f0ebe0; }
+.nav-divider { width: 1px; height: 20px; background: rgba(255,255,255,0.1); }
+.nav-book-info { display: flex; align-items: center; gap: 10px; flex: 1; }
+.nav-book-title { font-family: var(--font-serif); font-size: 14px; color: #f0ebe0; font-weight: 600; }
+.nav-chapter { font-size: 12px; color: rgba(240,235,224,0.45); }
+.nav-progress-wrap { display: flex; align-items: center; gap: 8px; }
+.nav-progress-bar { width: 100px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 99px; }
+.nav-progress-fill { height: 100%; background: var(--accent); border-radius: 99px; width: 78%; }
+.nav-pct { font-size: 11px; color: rgba(240,235,224,0.4); font-weight: 500; }
+.nav-actions { display: flex; gap: 6px; }
+.nav-action-btn {
+  background: rgba(255,255,255,0.08); border: none; color: rgba(240,235,224,0.7);
+  padding: 6px 12px; border-radius: 7px; font-size: 12px; cursor: pointer;
+  transition: all 0.15s; font-family: var(--font-ui);
+}
+.nav-action-btn:hover { background: rgba(255,255,255,0.14); color: #f0ebe0; }
+
+/* ── Split Layout ── */
+.split-layout {
+  display: flex; height: calc(100vh - 52px - 48px);
+}
+
+/* ── Left: Book Content ── */
+.book-pane {
+  flex: 0 0 62%; border-right: 1px solid var(--border); display: flex;
+  flex-direction: column; background: #fdf9f4;
+}
+.chapter-header {
+  padding: 16px 40px 12px; border-bottom: 1px solid var(--border);
+  background: white; flex-shrink: 0;
+}
+.chapter-header .part-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--text-muted); margin-bottom: 4px;
+}
+.chapter-header .chapter-title {
+  font-family: var(--font-serif); font-size: 18px; font-weight: 700; color: var(--text);
+}
+.book-scroll { flex: 1; overflow-y: auto; padding: 32px 48px; }
+.book-content {
+  max-width: 640px; margin: 0 auto; font-family: var(--font-serif);
+  font-size: 16.5px; line-height: 1.95; color: #2a2a3e;
+}
+.book-content h3 {
+  font-size: 15px; font-weight: 700; margin: 28px 0 14px;
+  text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted);
+}
+.book-content p { margin-bottom: 20px; }
+.book-content .highlight { background: var(--highlight-yellow); border-radius: 2px; padding: 0 1px; }
+.book-content .highlight.active { background: var(--highlight-active); }
+.book-content .footnote {
+  font-size: 13px; color: var(--text-muted); border-top: 1px solid var(--border);
+  padding-top: 16px; margin-top: 32px; font-family: var(--font-ui);
+}
+
+/* Floating selection menu */
+#float-menu {
+  position: fixed; background: #18192b; border-radius: 9px; padding: 6px;
+  display: none; gap: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); z-index: 1000;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.float-btn {
+  background: none; border: none; color: rgba(240,235,224,0.8); padding: 7px 12px;
+  border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.15s;
+  font-family: var(--font-ui); display: flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.float-btn:hover { background: rgba(255,255,255,0.1); color: #f0ebe0; }
+.float-btn.primary { background: var(--accent); color: white; }
+.float-btn.primary:hover { opacity: 0.88; }
+
+/* ── Right: AI Panel ── */
+.ai-pane {
+  flex: 1; display: flex; flex-direction: column; background: white; min-width: 0;
+}
+.ai-tabs {
+  display: flex; border-bottom: 1px solid var(--border); padding: 0 12px;
+  background: white; flex-shrink: 0;
+}
+.ai-tab {
+  padding: 12px 16px 11px; font-size: 13px; color: var(--text-muted);
+  cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s;
+  white-space: nowrap; font-weight: 400;
+}
+.ai-tab:hover { color: var(--text); }
+.ai-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+.ai-tab-icon { margin-right: 4px; }
+.ai-panel { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+.ai-panel.active { display: flex; }
+
+/* Chat panel */
+.ai-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.ai-msg { display: flex; gap: 8px; align-items: flex-start; }
+.ai-msg.user { flex-direction: row-reverse; }
+.ai-msg-avatar {
+  width: 28px; height: 28px; border-radius: 50%; font-size: 12px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.ai-msg.bot .ai-msg-avatar { background: linear-gradient(135deg, var(--accent), #e8a060); color: white; }
+.ai-msg.user .ai-msg-avatar { background: #18192b; color: #f0ebe0; }
+.ai-msg-bubble {
+  padding: 10px 13px; border-radius: 12px; font-size: 13px; line-height: 1.65;
+  max-width: calc(100% - 44px);
+}
+.ai-msg.bot .ai-msg-bubble {
+  background: #f8f5f0; border: 1px solid var(--border); border-top-left-radius: 3px; color: var(--text);
+}
+.ai-msg.user .ai-msg-bubble {
+  background: #18192b; color: #f0ebe0; border-bottom-right-radius: 3px;
+}
+.ai-msg-bubble strong { color: var(--accent); font-weight: 600; }
+.ai-msg-bubble p { margin-bottom: 8px; }
+.ai-msg-bubble p:last-child { margin-bottom: 0; }
+.cite-tag {
+  display: inline-block; background: var(--accent-dim); color: var(--accent);
+  font-size: 11px; padding: 2px 7px; border-radius: 5px; cursor: pointer; font-weight: 500;
+  border: 1px solid rgba(196,124,62,0.2); transition: all 0.15s; margin: 0 1px;
+}
+.cite-tag:hover { background: var(--accent); color: white; }
+
+/* Static content panels (notes, plan, recommend) */
+.static-panel { flex: 1; overflow-y: auto; padding: 20px; }
+.static-panel h2 { font-family: var(--font-serif); font-size: 16px; margin-bottom: 14px; color: var(--text); }
+.static-panel h3 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; color: var(--text); }
+.static-panel p, .static-panel li { font-size: 13px; line-height: 1.7; color: #3a3a5a; margin-bottom: 6px; }
+.static-panel ul { padding-left: 18px; }
+.static-panel .chip {
+  display: inline-block; background: var(--accent-dim); color: var(--accent);
+  font-size: 11px; padding: 3px 9px; border-radius: 99px; font-weight: 500; margin: 2px;
+}
+.plan-week {
+  background: #f8f5f0; border-radius: 10px; padding: 14px; margin-bottom: 12px;
+  border-left: 3px solid var(--accent);
+}
+.plan-week .week-label { font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.plan-week .week-task { font-size: 13px; color: var(--text); line-height: 1.6; }
+.progress-section { display: flex; align-items: center; gap: 10px; background: #f8f5f0; border-radius: 10px; padding: 12px; margin-bottom: 16px; }
+.progress-circle { position: relative; width: 48px; height: 48px; flex-shrink: 0; }
+.progress-circle svg { transform: rotate(-90deg); }
+.progress-circle .pct-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--accent); }
+.rec-book { background: #f8f5f0; border-radius: 10px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--border); }
+.rec-book .rec-title { font-family: var(--font-serif); font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+.rec-book .rec-author { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+.rec-book .rec-stars { color: #e8a060; font-size: 12px; margin-bottom: 6px; }
+.rec-book .rec-reason { font-size: 12.5px; color: #3a3a5a; line-height: 1.6; }
+
+/* AI input */
+.ai-input-wrap {
+  border-top: 1px solid var(--border); padding: 10px 12px; display: flex; gap: 8px;
+  align-items: center; background: white; flex-shrink: 0;
+}
+.ai-input {
+  flex: 1; border: 1px solid var(--border); border-radius: 9px; padding: 9px 13px;
+  font-size: 13px; font-family: var(--font-ui); color: var(--text); outline: none;
+  transition: border-color 0.15s; background: #fdfcfa;
+}
+.ai-input:focus { border-color: var(--accent); }
+.ai-input::placeholder { color: var(--text-muted); }
+.ai-send-btn {
+  background: var(--accent); border: none; width: 34px; height: 34px;
+  border-radius: 8px; color: white; font-size: 15px; cursor: pointer;
+  transition: opacity 0.15s; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.ai-send-btn:hover { opacity: 0.85; }
+
+/* ── Bottom Chapter Nav ── */
+.chapter-nav {
+  height: 48px; background: #18192b; display: flex; align-items: center;
+  padding: 0 16px; gap: 4px; overflow-x: auto; flex-shrink: 0;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.chapter-nav::-webkit-scrollbar { height: 2px; }
+.chapter-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); }
+.ch-btn {
+  flex-shrink: 0; padding: 5px 14px; border-radius: 7px; font-size: 12px;
+  color: rgba(240,235,224,0.5); cursor: pointer; transition: all 0.15s;
+  white-space: nowrap; border: none; background: none; font-family: var(--font-ui);
+}
+.ch-btn:hover { background: rgba(255,255,255,0.08); color: #f0ebe0; }
+.ch-btn.active { background: rgba(196,124,62,0.25); color: #f0ebe0; font-weight: 500; }
+
+/* Animations */
+.fade-in { animation: fadeIn 0.22s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+.typing-indicator { display: flex; gap: 4px; align-items: center; }
+.typing-dot { width: 5px; height: 5px; background: var(--text-muted); border-radius: 50%; animation: bounce 1.2s infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes bounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-5px); } }
+</style>
+</head>
+<body style="display:flex;flex-direction:column">
+
+<!-- ══ TOP NAV ══ -->
+<div class="top-nav">
+  <a href="index.html" class="back-btn">← 书库</a>
+  <div class="nav-divider"></div>
+  <div class="nav-book-info">
+    <span class="nav-book-title">存在与虚无</span>
+    <span class="nav-chapter">第四部分 · 第二章 · 有与做：自由</span>
+  </div>
+  <div class="nav-progress-wrap">
+    <div class="nav-progress-bar"><div class="nav-progress-fill"></div></div>
+    <span class="nav-pct">78%</span>
+  </div>
+  <div class="nav-actions">
+    <button class="nav-action-btn">🔖 书签</button>
+    <button class="nav-action-btn">🖊 划线</button>
+    <button class="nav-action-btn">Aa 字体</button>
+  </div>
+</div>
+
+<!-- ══ SPLIT LAYOUT ══ -->
+<div class="split-layout">
+
+  <!-- ─ LEFT: Book Content ─ -->
+  <div class="book-pane">
+    <div class="chapter-header">
+      <div class="part-label">第四部分 · 有与做和存在</div>
+      <div class="chapter-title">第二章 · 处境中的自由</div>
+    </div>
+    <div class="book-scroll">
+      <div class="book-content" id="book-content">
+
+        <h3>§ 1. 自由的悖论</h3>
+        <p id="p1">
+          <span id="span-sartre-freedom" class="highlight">自由并不是一种可以拥有或放弃的性质，而是人之存在的根本结构。</span>
+          人不能不是自由的——即便他试图逃避自由，这种逃避行为本身也是一种自由的行使。
+          萨特将这种处境称为「被判定为自由」，它意味着人无时无刻不处于选择的重压之下。
+        </p>
+
+        <p id="p2">
+          当然，这里需要区分两种含义上的「可能性」。自由不是指可以做任何事情——
+          <span id="span-situation" class="highlight">人总是处于某种处境之中，处境构成了自由展开的场域，而非自由的障碍。</span>
+          囚犯的牢房并不取消他的自由；它只是规定了自由展开的独特方式。
+          问题不在于「我能否离开？」而在于「我如何与这堵墙建立关系？」
+        </p>
+
+        <p>
+          这种分析在存在论层面上先于任何心理学或社会学描述。萨特不是在说某个具体的人
+          「感到」自由——他是在断言，自由是意识（自为）的存在方式，是它对自身存在的不断
+          超越与否定。</p>
+
+        <h3>§ 2. 动机的虚无性</h3>
+
+        <p id="p3">
+          一个常见的误解是：当我们说某人「因为某种动机而行动」时，我们似乎预设了动机是一种
+          给定的实在，它像因果力量一样推动行为。萨特对此提出了根本性的质疑。
+          <span id="span-motive">动机本身并不独立存在；它是意识在回顾性地解释自身行为时投射出来的意义。</span>
+        </p>
+
+        <p>
+          换言之，<span id="span-choice" class="highlight">
+          我们不是因为有了某个动机才做出选择，而是在选择的同时构成了动机。</span>
+          这个论断具有令人眩晕的深度：它意味着任何「情有可原」或「身不由己」的
+          说法，在严格的存在论意义上都是一种自欺（mauvaise foi）。
+        </p>
+
+        <p>
+          然而，自欺并不是一种简单的谎言。撒谎者清楚地知道真相而有意隐瞒；自欺者
+          却既知道又不知道——他在同一个意识行为中同时肯定和否定某件事。
+          这种独特的「半透明性」，是人类现实的一个持续特征。
+        </p>
+
+        <h3>§ 3. 他者与凝视</h3>
+
+        <p id="p4">
+          至此，我们尚未考虑他者的维度。萨特认为，<span id="span-gaze" class="highlight">
+          他者的凝视是一种本体论事件——被他者看见，意味着我的自由被客体化，
+          我突然发现自己作为一个「物」存在于他人的世界之中。</span>
+          这就是羞耻感的本源：不是因为做错了什么，而是突然意识到自己作为对象的脆弱存在。
+        </p>
+
+        <p>
+          冲突因此成为一切人际关系的根本结构。我既想保持自身的超越性（自为），
+          又受到他者凝视的威胁，被迫认同一个固定的「本质」。
+          萨特后来在《禁闭》中给出了著名的戏剧性表达：「他人即地狱。」
+        </p>
+
+        <div class="footnote">
+          <strong>译者注</strong>：本章所有引文均参照陈宣良中译本（生活·读书·新知三联书店，1987年）。
+          「自欺」（mauvaise foi）直译为「坏的信念」，中文哲学界通常译为「自欺」。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─ RIGHT: AI Panel ─ -->
+  <div class="ai-pane">
+    <!-- Tabs -->
+    <div class="ai-tabs">
+      <div class="ai-tab active" onclick="switchTab('deepread', this)">
+        <span class="ai-tab-icon">🔍</span>精读问答
+      </div>
+      <div class="ai-tab" onclick="switchTab('notes', this)">
+        <span class="ai-tab-icon">📝</span>笔记
+      </div>
+      <div class="ai-tab" onclick="switchTab('plan', this)">
+        <span class="ai-tab-icon">📅</span>阅读计划
+      </div>
+      <div class="ai-tab" onclick="switchTab('recommend', this)">
+        <span class="ai-tab-icon">💡</span>推荐
+      </div>
+    </div>
+
+    <!-- Deepread chat panel -->
+    <div class="ai-panel active" id="panel-deepread">
+      <div class="ai-messages" id="ai-messages">
+        <div class="ai-msg bot fade-in">
+          <div class="ai-msg-avatar">K</div>
+          <div class="ai-msg-bubble">
+            <p>你好！我已定位到<strong>「处境中的自由」</strong>章节。</p>
+            <p>你可以直接提问，或选中左侧任意文字发送给我分析。</p>
+          </div>
+        </div>
+        <div class="ai-msg bot fade-in">
+          <div class="ai-msg-avatar">K</div>
+          <div class="ai-msg-bubble">
+            <p>💡 <strong>这章的核心张力</strong>：萨特一方面说人是自由的，
+            另一方面又说人总处于处境之中——这两者如何共存？</p>
+            <p>点击下面的段落编号可以快速跳转到相关引用：
+            <span class="cite-tag" onclick="jumpTo('span-sartre-freedom')">§1 自由的根本结构</span>
+            <span class="cite-tag" onclick="jumpTo('span-situation')">§1 处境与自由</span>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="ai-input-wrap">
+        <input class="ai-input" id="ai-input" placeholder="针对这章提问…"
+          onkeydown="if(event.key==='Enter')sendAI()">
+        <button class="ai-send-btn" onclick="sendAI()">↑</button>
+      </div>
+    </div>
+
+    <!-- Notes panel -->
+    <div class="ai-panel" id="panel-notes">
+      <div class="static-panel">
+        <h2>📝 第四部分·第二章 笔记</h2>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">
+          <span class="chip">自由</span><span class="chip">处境</span>
+          <span class="chip">自欺</span><span class="chip">他者</span>
+          <span class="chip">存在主义</span>
+        </div>
+        <h3>核心主张</h3>
+        <ul>
+          <li>自由不是性质而是存在结构：人「被判定为自由」</li>
+          <li>处境是自由展开的场域，而非障碍</li>
+          <li>动机不先于选择，而是在选择中被构成</li>
+          <li>自欺（mauvaise foi）：同一意识中的自我矛盾</li>
+        </ul>
+        <h3>重要区分</h3>
+        <ul>
+          <li><strong>自由 vs 全能</strong>：自由不等于可以做任何事</li>
+          <li><strong>自欺 vs 谎言</strong>：自欺者既知道又不知道真相</li>
+          <li><strong>自为 vs 自在</strong>：意识的存在方式 vs 物的存在方式</li>
+        </ul>
+        <h3>关键引用</h3>
+        <p style="background:#f8f5f0;border-left:3px solid var(--accent);padding:10px 14px;border-radius:0 8px 8px 0;font-style:italic;font-size:13px;">
+          「我们不是因为有了某个动机才做出选择，而是在选择的同时构成了动机。」
+        </p>
+        <h3>与其他章节的关联</h3>
+        <ul>
+          <li>→ 第三部分·第一章：他者的存在（凝视的本体论地位）</li>
+          <li>→ 第一部分·第二章：自欺的初步分析</li>
+        </ul>
+        <div style="margin-top:20px;display:flex;gap:8px;">
+          <button onclick="alert('笔记已保存到 data/notes/')" style="background:var(--accent);color:white;border:none;padding:9px 16px;border-radius:8px;font-size:12.5px;cursor:pointer;">💾 保存笔记</button>
+          <button onclick="alert('导出为 Markdown')" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:9px 16px;border-radius:8px;font-size:12.5px;cursor:pointer;">↗ 导出</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plan panel -->
+    <div class="ai-panel" id="panel-plan">
+      <div class="static-panel">
+        <h2>📅 《存在与虚无》阅读计划</h2>
+        <div class="progress-section">
+          <div class="progress-circle">
+            <svg viewBox="0 0 48 48" width="48" height="48">
+              <circle cx="24" cy="24" r="20" fill="none" stroke="#e4ddd2" stroke-width="4"/>
+              <circle cx="24" cy="24" r="20" fill="none" stroke="var(--accent)" stroke-width="4"
+                stroke-dasharray="125.7" stroke-dashoffset="27.7" stroke-linecap="round"/>
+            </svg>
+            <div class="pct-text">78%</div>
+          </div>
+          <div>
+            <div style="font-size:13px;font-weight:600;">进度良好</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">预计再读 4.5 小时完成全书</div>
+          </div>
+        </div>
+        <div class="plan-week">
+          <div class="week-label">✅ 已完成（第1-3部分）</div>
+          <div class="week-task">本体论导论、自欺与自为的结构、他者与世界</div>
+        </div>
+        <div class="plan-week" style="border-left-color:#4a7bbf;">
+          <div class="week-label" style="color:#4a7bbf;">📍 当前位置（第4部分·第2章）</div>
+          <div class="week-task"><strong>处境中的自由</strong>：自由与处境的辩证关系，动机的构成性分析</div>
+        </div>
+        <div class="plan-week" style="border-left-color:#e4ddd2;">
+          <div class="week-label" style="color:var(--text-muted);">⏭ 待读（第4部分·第3章）</div>
+          <div class="week-task">自由与责任 → 结论：从道德的角度看</div>
+        </div>
+        <h3 style="margin-top:20px;">建议</h3>
+        <ul>
+          <li>「处境与自由」一节建议对照海德格尔《存在与时间》第38节</li>
+          <li>完成全书后读萨特《存在主义是一种人道主义》（约1小时）</li>
+        </ul>
+        <div style="margin-top:16px;">
+          <button onclick="alert('计划已保存到 data/plans/')" style="background:var(--accent);color:white;border:none;padding:9px 16px;border-radius:8px;font-size:12.5px;cursor:pointer;">💾 保存计划</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recommend panel -->
+    <div class="ai-panel" id="panel-recommend">
+      <div class="static-panel">
+        <h2>💡 基于此书的推荐</h2>
+        <p style="color:var(--text-muted);font-size:12.5px;margin-bottom:16px;">
+          根据您正在阅读的内容和书库，以下书籍与本章主题高度相关：
+        </p>
+        <div class="rec-book">
+          <div class="rec-title">《存在与时间》</div>
+          <div class="rec-author">马丁·海德格尔 · 您已读至 45%</div>
+          <div class="rec-stars">⭐⭐⭐⭐⭐</div>
+          <div class="rec-reason">
+            萨特「处境」概念直接来源于海德格尔的「此在的处境性」（Befindlichkeit）。
+            对比第38节将极大加深您对本章的理解。
+          </div>
+        </div>
+        <div class="rec-book">
+          <div class="rec-title">《哲学研究》</div>
+          <div class="rec-author">路德维希·维特根斯坦 · 已完成</div>
+          <div class="rec-stars">⭐⭐⭐⭐</div>
+          <div class="rec-reason">
+            从语言分析角度挑战萨特的「内在性」前提——维特根斯坦会质疑「自欺」
+            这个概念在多大程度上是一个有意义的表达。
+          </div>
+        </div>
+        <div class="rec-book">
+          <div class="rec-title">《悲剧的诞生》</div>
+          <div class="rec-author">弗里德里希·尼采 · 未读</div>
+          <div class="rec-stars">⭐⭐⭐</div>
+          <div class="rec-reason">
+            尼采的「权力意志」与萨特的自由意志在结构上高度相似，
+            但起点和归宿截然不同——是极好的对照阅读材料。
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /ai-pane -->
+</div><!-- /split-layout -->
+
+<!-- Floating selection menu -->
+<div id="float-menu" style="display:none;position:fixed;z-index:1000;">
+  <button class="float-btn primary" onclick="askAboutSelection()">💬 问 AI</button>
+  <button class="float-btn" onclick="highlightSelection()">🖊 划线</button>
+  <button class="float-btn" onclick="addToNote()">📝 加入笔记</button>
+  <button class="float-btn" onclick="hideFloatMenu()">✕</button>
+</div>
+
+<!-- ══ BOTTOM CHAPTER NAV ══ -->
+<div class="chapter-nav">
+  <button class="ch-btn">导论</button>
+  <button class="ch-btn">第一部分</button>
+  <button class="ch-btn">第二部分</button>
+  <button class="ch-btn">第三部分</button>
+  <button class="ch-btn active">第四部分 ▾</button>
+  <span style="color:rgba(255,255,255,0.2);padding:0 4px">|</span>
+  <button class="ch-btn">§ 第一章</button>
+  <button class="ch-btn active">§ 第二章</button>
+  <button class="ch-btn">§ 第三章</button>
+  <span style="color:rgba(255,255,255,0.2);padding:0 4px">|</span>
+  <button class="ch-btn" style="margin-left:auto;color:rgba(240,235,224,0.35);">→ 下一章</button>
+</div>
+
+<script>
+// ── Tab switching ──
+function switchTab(name, el) {
+  document.querySelectorAll('.ai-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.ai-panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+  // Update input placeholder
+  const placeholders = {
+    deepread: '针对这章提问…',
+    notes: '让 AI 修改或扩展笔记…',
+    plan: '调整阅读计划…',
+    recommend: '描述你的阅读偏好…'
+  };
+  const inp = document.getElementById('ai-input');
+  if (inp) inp.placeholder = placeholders[name] || '输入问题…';
+}
+
+// ── Citation jump ──
+function jumpTo(spanId) {
+  const el = document.getElementById(spanId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('active');
+  setTimeout(() => el.classList.remove('active'), 2000);
+}
+
+// ── Text selection ──
+let selectedText = '';
+document.getElementById('book-content').addEventListener('mouseup', (e) => {
+  const sel = window.getSelection();
+  const text = sel ? sel.toString().trim() : '';
+  if (text.length > 6) {
+    selectedText = text;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    showFloatMenu(rect.left + rect.width / 2, rect.top - 8);
+  } else {
+    hideFloatMenu();
+  }
+});
+
+function showFloatMenu(x, y) {
+  const menu = document.getElementById('float-menu');
+  menu.style.display = 'flex';
+  const mw = 280;
+  menu.style.left = Math.min(Math.max(x - mw/2, 8), window.innerWidth - mw - 8) + 'px';
+  menu.style.top = (y - 50) + 'px';
+}
+
+function hideFloatMenu() {
+  document.getElementById('float-menu').style.display = 'none';
+  selectedText = '';
+}
+
+document.addEventListener('mousedown', (e) => {
+  if (!e.target.closest('#float-menu') && !e.target.closest('#book-content')) hideFloatMenu();
+});
+
+function askAboutSelection() {
+  if (!selectedText) return;
+  hideFloatMenu();
+  // Switch to deepread tab
+  document.querySelectorAll('.ai-tab')[0].click();
+  // Pre-fill input
+  const inp = document.getElementById('ai-input');
+  inp.value = `「${selectedText.slice(0, 40)}${selectedText.length > 40 ? '…' : ''}」这段话是什么意思？`;
+  inp.focus();
+  sendAI();
+}
+
+function highlightSelection() {
+  hideFloatMenu();
+  // Visual feedback
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount > 0) {
+    try {
+      const range = sel.getRangeAt(0);
+      const span = document.createElement('span');
+      span.className = 'highlight';
+      range.surroundContents(span);
+      sel.removeAllRanges();
+    } catch(e) { /* ignore cross-node selections */ }
+  }
+  showToast('已添加划线');
+}
+
+function addToNote() {
+  hideFloatMenu();
+  showToast('已添加到笔记');
+}
+
+// ── AI Chat ──
+const deepreadResponses = [
+  {
+    q: '自由',
+    a: `萨特在这里提出了一个反直觉的命题：<strong>自由不是我们可以选择拥有或放弃的东西，
+而是意识存在的方式本身。</strong><br><br>
+他的论证路径是：意识（自为）的本质是「虚无」——它永远不能与自身完全重合，
+永远在「成为」的过程中。这种不断的自我超越，就是自由。<br><br>
+<span class="cite-tag" onclick="jumpTo('span-sartre-freedom')">§1 被判定为自由</span>
+<span class="cite-tag" onclick="jumpTo('span-choice')">§2 选择先于动机</span>`
+  },
+  {
+    q: '动机',
+    a: `非常好的问题！<strong>萨特颠覆了日常直觉中「动机→选择」的因果链。</strong><br><br>
+通常我们认为：先有动机，再产生行为。但萨特认为，动机本身是意识在选择时
+<em>投射</em>出来的意义结构——没有选择，就没有动机。<br><br>
+这意味着「情有可原」在存在论上是一种自欺：用「环境所迫」来否认自己的自由。<br><br>
+<span class="cite-tag" onclick="jumpTo('span-motive')">§2 动机的虚无性</span>`
+  },
+  {
+    q: '自欺',
+    a: `萨特对自欺（mauvaise foi）的分析是本书最精彩的部分之一。<br><br>
+<strong>自欺不是谎言</strong>——撒谎者知道真相；而自欺者在同一意识行为中
+<em>既知道又不知道</em>。这在逻辑上看似矛盾，但萨特认为这恰恰揭示了意识的双重性：
+意识既是透明的（对自身），又有能力对自身撒谎。<br><br>
+经典例子：一个服务员刻意「扮演」服务员的角色，试图把自己当作一件物（自在）——
+这就是自欺。`
+  },
+  {
+    default: true,
+    a: `基于萨特在本章的论述，{query}这个问题涉及到他对<strong>自由与处境关系</strong>的核心分析。<br><br>
+萨特认为，处境并不限制自由，而是自由得以展开的具体场域。自由总是<em>处境中的自由</em>，
+而处境的意义也只有在某种自由的筹划（projet）中才能显现。<br><br>
+这与康德的自由观形成了有趣的对比——康德的自由是脱离自然因果链的道德实践理性，
+而萨特的自由是深陷处境却永远超越处境的存在方式。<br><br>
+<span class="cite-tag" onclick="jumpTo('span-situation')">§1 处境与自由</span>
+<span class="cite-tag" onclick="jumpTo('span-choice')">§2 选择的先在性</span>`
+  }
+];
+
+function getDeepreadResponse(query) {
+  const q = query.toLowerCase();
+  for (const r of deepreadResponses) {
+    if (!r.default && q.includes(r.q)) return r.a;
+  }
+  const def = deepreadResponses.find(r => r.default);
+  return def.a.replace('{query}', `「${query.slice(0, 20)}」`);
+}
+
+function sendAI() {
+  const input = document.getElementById('ai-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  const msgs = document.getElementById('ai-messages');
+
+  // User bubble
+  msgs.innerHTML += `<div class="ai-msg user fade-in">
+    <div class="ai-msg-avatar">我</div>
+    <div class="ai-msg-bubble">${text}</div>
+  </div>`;
+
+  // Typing
+  const typingId = 'typing_' + Date.now();
+  msgs.innerHTML += `<div class="ai-msg bot fade-in" id="${typingId}">
+    <div class="ai-msg-avatar">K</div>
+    <div class="ai-msg-bubble">
+      <div class="typing-indicator">
+        <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
+      </div>
+    </div>
+  </div>`;
+  msgs.scrollTop = msgs.scrollHeight;
+
+  setTimeout(() => {
+    document.getElementById(typingId)?.remove();
+    msgs.innerHTML += `<div class="ai-msg bot fade-in">
+      <div class="ai-msg-avatar">K</div>
+      <div class="ai-msg-bubble">${getDeepreadResponse(text)}</div>
+    </div>`;
+    msgs.scrollTop = msgs.scrollHeight;
+  }, 1000 + Math.random() * 500);
+}
+
+// ── Toast ──
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.style.cssText = `position:fixed;bottom:70px;left:50%;transform:translateX(-50%);
+    background:#18192b;color:#f0ebe0;padding:8px 18px;border-radius:99px;
+    font-size:12.5px;z-index:9999;animation:fadeIn 0.2s ease;`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2000);
+}
+</script>
+</body>
+</html>

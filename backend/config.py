@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     note_storage_dir: str = "data/notes"
     plan_storage_dir: str = "data/plans"
 
+    # Single collection for all book chunks (agents read from here)
+    books_collection_name: str = "kant_library"
+
+    # Book catalog collection (one entry per book, used by RecommendationAgent)
+    catalog_collection_name: str = "book_catalog"
+
 
 def get_settings() -> Settings:
     return Settings()

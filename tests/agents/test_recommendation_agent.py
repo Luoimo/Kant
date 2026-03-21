@@ -21,11 +21,23 @@ def _make_doc(
     )
 
 
+def _make_catalog_doc(title: str, author: str) -> Document:
+    return Document(
+        page_content=f"书名：{title} / 作者：{author}\n章节数：5  总字数约：50000\n内容片段：【第一章】...",
+        metadata={"book_title": title, "author": author, "source": f"{title}.epub",
+                  "chapter_count": 5, "total_chars": 50000},
+    )
+
+
 @pytest.fixture
 def mock_store():
     docs = [
         _make_doc("存在主义哲学的核心思想...", title="存在与虚无", author="萨特"),
         _make_doc("人的全面异化与资本主义...", title="1844年经济学哲学手稿", author="马克思"),
+    ]
+    catalog_docs = [
+        _make_catalog_doc("存在与虚无", "萨特"),
+        _make_catalog_doc("1844年经济学哲学手稿", "马克思"),
     ]
     store = MagicMock()
     store.collection_name = "test_collection"
@@ -33,6 +45,7 @@ def mock_store():
     store.similarity_search_with_score.return_value = [(d, 0.9) for d in docs]
     store.get_all_documents.return_value = docs
     store.list_sources.return_value = ["存在与虚无.epub", "手稿.epub"]
+    store.catalog_search.return_value = catalog_docs
     return store
 
 
@@ -60,6 +73,7 @@ class TestRecommendationAgent:
         store.similarity_search_with_score.return_value = []
         store.get_all_documents.return_value = []
         store.list_sources.return_value = []
+        store.catalog_search.return_value = []
         agent = RecommendationAgent(store=store, llm=mock_llm)
 
         result = agent.run(query="推荐书")
@@ -81,6 +95,7 @@ class TestRecommendationAgent:
         store.similarity_search_with_score.return_value = [(d, 0.9) for d in docs]
         store.get_all_documents.return_value = docs
         store.list_sources.return_value = ["same.epub"]
+        store.catalog_search.return_value = [_make_catalog_doc("Same Book", "Author A")]
         agent = RecommendationAgent(store=store, llm=mock_llm)
         result = agent.run(query="推荐哲学书")
 

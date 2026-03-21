@@ -344,7 +344,7 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_m
     """
     if store is None:
         settings = get_settings()
-        store = ChromaStore(collection_name=settings.chroma_database)
+        store = ChromaStore()
 
     settings = get_settings()
     mem0 = Mem0Store() if enable_memory else None

@@ -8,6 +8,7 @@ venv/
 .env/
 .env
 .env.*        # 比如 .env.local / .env.dev
+.venv
 
 # IDE / 编辑器
 .idea/

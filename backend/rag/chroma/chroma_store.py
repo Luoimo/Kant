@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 # Chroma 元数据值只允许 str/int/float/bool，list 需序列化
 _PAGE_SEP = ","
 
+# 固定 collection 名，每本书一条摘要条目，供 RecommendationAgent 快速检索
+CATALOG_COLLECTION = "book_catalog"
+
 
 def _sanitize_collection_name(title: str) -> str:
     """
@@ -91,6 +94,18 @@ class Chroma:
         )
 
     # --- 写入 ---
+
+    def upsert_documents(self, documents: list[Document], ids: list[str]) -> None:
+        """向量化并 upsert（存在则更新，不存在则插入），用于 book_catalog 条目维护。"""
+        texts = [doc.page_content for doc in documents]
+        metadatas = [doc.metadata for doc in documents]
+        embeddings = self._embedding_function.embed_documents(texts)
+        self._collection.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=texts,
+            metadatas=metadatas,
+        )
 
     def add_documents(self, documents: list[Document], ids: list[str]) -> None:
         """嵌入文本并批量写入 chromadb collection。"""
@@ -240,14 +255,14 @@ class ChromaStore:
 
     def __init__(
         self,
-        collection_name: str = "kant_docs",
+        collection_name: str | None = None,
         persist_directory: str | None = None,
         chunk_config: ChunkConfig | None = None,
         clean_config: CleanConfig | None = None,
         ingest_config: IngestConfig | None = None,
     ) -> None:
         settings = get_settings()
-        self.collection_name = collection_name
+        self.collection_name = collection_name or settings.books_collection_name
         self.persist_directory = persist_directory or str(
             Path(settings.chroma_persist_dir).resolve()
         )
@@ -294,15 +309,21 @@ class ChromaStore:
         chunks = chunker.chunk_content(cleaned)
         logger.debug("  ✓ 切块完成，共 %d 个 chunk", len(chunks))
 
-        # 未指定 collection 时，自动以书名作为 collection 名称
+        # 未指定 collection 时，使用 ChromaStore 默认 collection（所有书共享一个库）
         if collection_name is None:
-            raw_title = book_content.metadata.get("title") or path.stem
-            collection_name = _sanitize_collection_name(raw_title)
-            logger.info("  → collection：%s", collection_name)
+            collection_name = self.collection_name
+        logger.info("  → collection：%s", collection_name)
 
         db = self._resolve_db(collection_name)
         result = self._ingest_chunks_to_db(chunks, db, source=str(path))
         logger.info("  ✓ 入库完成：%s", result)
+
+        # 同步写入 book_catalog（upsert，每本书一条摘要条目）
+        catalog_title = book_content.metadata.get("title") or path.stem
+        catalog_author = book_content.metadata.get("author") or "未知作者"
+        self._upsert_catalog_entry(chunks, catalog_title, catalog_author, str(path))
+        logger.info("  ✓ book_catalog 已更新：%s / %s", catalog_title, catalog_author)
+
         return result
 
     def ingest_chunks(
@@ -337,6 +358,27 @@ class ChromaStore:
             collection.delete(ids=ids)
             logger.info("已删除 %d 个 chunk（source=%s）", len(ids), source)
         return len(ids)
+
+    # ------------------------------------------------------------------
+    # 公开：book_catalog 检索接口
+    # ------------------------------------------------------------------
+
+    def catalog_search(self, query: str, k: int = 8) -> list[Document]:
+        """
+        在 book_catalog 集合中语义检索，返回最相关的书目摘要条目。
+
+        每条结果对应一本书，metadata 包含 book_title / author / source /
+        chapter_count / total_chars，page_content 是富文本摘要，可直接喂给 LLM。
+
+        :param query: 用户的推荐需求或主题描述
+        :param k:     返回书目数量（默认 8）
+        """
+        db = self._resolve_db(CATALOG_COLLECTION)
+        try:
+            return db.similarity_search(query, k=k)
+        except Exception as exc:
+            logger.warning("catalog_search 失败（可能书目为空）：%s", exc)
+            return []
 
     # ------------------------------------------------------------------
     # 公开：检索接口
@@ -437,6 +479,77 @@ class ChromaStore:
     # 内部工具
     # ------------------------------------------------------------------
 
+    def _build_catalog_entry(
+        self,
+        chunks: list[TextChunk],
+        book_title: str,
+        author: str,
+        source: str,
+    ) -> Document:
+        """
+        从 TextChunk 列表构建 book_catalog 摘要条目。
+
+        内容格式（富文本，便于语义向量化）：
+            书名：{title} / 作者：{author}
+            章节数：N  总字数约：M
+            章节列表：章1、章2、...
+            内容片段：【章1】前300字...【章2】...
+        """
+        total_chars = sum(c.char_count for c in chunks)
+
+        # 收集有序不重复章节标题
+        seen: set[str] = set()
+        chapter_titles: list[str] = []
+        for c in chunks:
+            ct = getattr(c.metadata, "chapter_title", "") or ""
+            if ct and ct not in seen:
+                seen.add(ct)
+                chapter_titles.append(ct)
+
+        # 每章取首个 chunk 前 300 字（最多取前 5 章）
+        chapter_first: dict[str, str] = {}
+        for c in chunks:
+            ct = getattr(c.metadata, "chapter_title", "") or "（无标题）"
+            if ct not in chapter_first:
+                chapter_first[ct] = c.text[:300].replace("\n", " ")
+
+        snippet_keys = chapter_titles[:5] or list(chapter_first.keys())[:5]
+        snippets = "\n".join(
+            f"【{ct}】{chapter_first.get(ct, '')}"
+            for ct in snippet_keys
+        )
+        chapters_str = "、".join(chapter_titles[:20]) or "（未提取到章节）"
+
+        content = (
+            f"书名：{book_title} / 作者：{author}\n"
+            f"章节数：{len(chapter_titles)}  总字数约：{total_chars}\n"
+            f"章节列表：{chapters_str}\n"
+            f"内容片段：\n{snippets}"
+        )
+        return Document(
+            page_content=content,
+            metadata={
+                "book_title": book_title,
+                "author": author,
+                "source": source,
+                "chapter_count": len(chapter_titles),
+                "total_chars": total_chars,
+            },
+        )
+
+    def _upsert_catalog_entry(
+        self,
+        chunks: list[TextChunk],
+        book_title: str,
+        author: str,
+        source: str,
+    ) -> None:
+        """将书籍摘要 upsert 到 book_catalog 集合（同一本书重复入库时自动更新）。"""
+        catalog_id = "catalog_" + hashlib.md5(source.encode("utf-8")).hexdigest()[:16]
+        entry = self._build_catalog_entry(chunks, book_title, author, source)
+        db = self._resolve_db(CATALOG_COLLECTION)
+        db.upsert_documents([entry], [catalog_id])
+
     def _get_or_create_db(self) -> Chroma:
         """初始化或加载已有的 Chroma 实例（Cloud 或本地）。"""
         return Chroma(
@@ -473,9 +586,19 @@ class ChromaStore:
         cfg = self.ingest_config
         total = len(chunks)
 
-        # 去重：collection 已有数据则整本跳过（每本书独立 collection，无需逐条比对）
-        if cfg.skip_existing and db._collection.count() > 0:
-            logger.info("  → collection 已存在数据，跳过入库")
+        # 去重：按 chunk_id 逐条比对，只写入新增 chunk（支持书籍增量更新）
+        if cfg.skip_existing and total > 0:
+            all_ids = [c.chunk_id for c in chunks]
+            existing = db._collection.get(ids=all_ids, include=[])
+            existing_ids: set[str] = set(existing.get("ids") or [])
+            chunks = [c for c in chunks if c.chunk_id not in existing_ids]
+            skipped = total - len(chunks)
+            if skipped:
+                logger.info("  → 跳过已有 chunk：%d 条", skipped)
+        else:
+            skipped = 0
+
+        if not chunks:
             return IngestResult(
                 source=source,
                 total_chunks=total,
@@ -498,7 +621,7 @@ class ChromaStore:
             source=source,
             total_chunks=total,
             added=added,
-            skipped=0,
+            skipped=skipped,
             collection_name=db._collection.name,
         )
 

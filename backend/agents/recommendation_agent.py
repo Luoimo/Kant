@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 import sys
+
+logger = logging.getLogger(__name__)
 
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, AnyMessage
@@ -53,12 +56,11 @@ class RecommendationAgent:
     ) -> None:
         if store is None:
             settings = get_settings()
-            store = ChromaStore(collection_name=settings.chroma_database)
+            store = ChromaStore()
 
         self.store = store
         self.llm = llm or get_llm(temperature=0.5)
         self.k = k
-        self._catalog_cache: dict | None = None
 
         # HybridRetriever 一次性构建
         self._retriever = HybridRetriever(
@@ -69,21 +71,26 @@ class RecommendationAgent:
         )
 
     # ------------------------------------------------------------------
-    # 书目总览缓存
+    # 书目检索（book_catalog 集合 → 单次语义搜索）
     # ------------------------------------------------------------------
 
-    def _get_catalog_summary(self) -> str:
-        sources = self.store.list_sources()
-        cache_key = hash(tuple(sorted(sources)))
-        if self._catalog_cache and self._catalog_cache.get("key") == cache_key:
-            return self._catalog_cache["summary"]
-        summary = self._build_catalog_summary(sources[:30])
-        self._catalog_cache = {"key": cache_key, "summary": summary}
-        return summary
+    def _get_catalog_context(self, query: str, k: int = 10) -> str:
+        """
+        从 book_catalog 集合做一次语义检索，返回与查询最相关的书目摘要文本。
 
-    def _build_catalog_summary(self, sources: list[str]) -> str:
+        如果 catalog 为空（书籍尚未通过新版 ingest 入库），自动降级到旧版
+        per-source similarity_search 方式。
+        """
+        catalog_docs = self.store.catalog_search(query, k=k)
+        if catalog_docs:
+            # 每条 catalog doc 已经是富文本摘要，直接拼接
+            return "\n\n---\n\n".join(d.page_content for d in catalog_docs)
+
+        # 降级：旧版逐源查询（兼容尚未更新 catalog 的旧数据）
+        logger.warning("book_catalog 为空，降级使用逐源检索构建书目概览")
+        sources = self.store.list_sources()
         lines: list[str] = []
-        for source in sources:
+        for source in sources[:30]:
             try:
                 docs = self.store.similarity_search(
                     "introduction overview", k=2, filter={"source": source}
@@ -177,7 +184,6 @@ class RecommendationAgent:
             )
 
         books_list = "\n".join(book_infos) if book_infos else "（未提取到书名）"
-        catalog_summary = self._get_catalog_summary()
         type_hint = RECOMMEND_TYPE_HINTS.get(recommend_type, "")
         prev_titles = self._extract_previous_titles(recommend_messages)
         exclusion_note = (
@@ -185,12 +191,13 @@ class RecommendationAgent:
             + "\n".join(f"- {t}" for t in prev_titles)
             if prev_titles else ""
         )
+        catalog_context = self._get_catalog_context(query)
 
         user_prompt = (
             f"用户的阅读偏好/推荐需求：\n{query}\n\n"
             f"推荐策略：{type_hint}\n\n"
-            f"【全书库概览（最多 30 本）】：\n{catalog_summary}\n\n"
-            f"【检索到的相关书籍（去重）】：\n{books_list}\n\n"
+            f"【书库中与需求最相关的书目（含章节和内容摘要）】：\n{catalog_context}\n\n"
+            f"【混合检索到的相关内容片段（去重书名）】：\n{books_list}\n\n"
             f"【详细片段（供参考内容特点）】：\n{sep.join(evidence_blocks)}"
             f"{exclusion_note}\n\n"
             "请根据以上内容，为用户推荐最符合其需求的书籍。"
