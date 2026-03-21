@@ -1,6 +1,6 @@
 # Agent Enhancement Design
 **Date:** 2026-03-20
-**Scope:** NoteAgent, RecommendationAgent, ReadingPlanAgent — multi-turn state, per-agent message history, cross-agent pipeline, persistent storage
+**Scope:** NoteAgent, RecommendationAgent, ReadingPlanAgent — multi-turn state, per-agent message history, multi-agent pipeline, persistent storage
 
 ---
 
@@ -27,7 +27,8 @@ DeepReadAgent is the most complete agent in the system. The other three agents (
 | Multi-turn state | Per-agent message lists in GraphState | Leverages existing LangGraph checkpointer |
 | Persistence | SqliteSaver replacing MemorySaver | Zero new dependencies; one-line change |
 | Agent memory | GraphState fields, not Mem0 namespaces | Mem0 is for user preference extraction only |
-| Cross-agent handoff | `handoff_docs` serialized as `list[dict]` in GraphState | JSON-safe for SqliteSaver; reconstructed to Document at consumer |
+| Cross-agent context | Inject previous agent's output text into next agent's task message | Avoids handoff_docs complexity; no raw doc passing |
+| Multi-agent pipeline | `pending_agents` queue + `compound_context` in GraphState | Clean sequential execution; easy to reason about |
 | Note/Plan storage | Pluggable Storage interface (local → S3) | Avoids storing large text in GraphState |
 
 ---
@@ -43,18 +44,20 @@ memory_search node  →  Mem0.search() → memory_context (user preferences)
   ↓
 Supervisor node
   - Safety check
-  - Intent classification (intent + action + source_agent)
-  - Validate handoff freshness before populating handoff_docs
-  - Write HumanMessage(task) to target agent's messages list as delta
+  - Intent classification (intent + action + compound_intents)
+  - If compound: fill pending_agents queue
+  - Build task message with compound_context injected
+  - Write HumanMessage(task) to target agent's messages list
   ↓
 [deepread | notes | plan | recommend] node
-  - Read own {agent}_messages as conversation context
-  - Use handoff_docs if present (skip retrieval)
+  - Read own {agent}_messages as full conversation context
   - Generate output
   - Write AIMessage(output) to own {agent}_messages
-  - Write {agent}_last_docs (serialized) and {agent}_last_turn_index for downstream
   ↓
-Supervisor node  →  detects answer present → finalize
+Supervisor node
+  - Update compound_context with agent's output
+  - Pop next agent from pending_agents if any → route there
+  - Otherwise → finalize
   ↓
 finalize node  (closure inside build_minimal_supervisor_graph, captures deps)
   - Write AIMessage(final_answer) to global messages
@@ -79,7 +82,7 @@ All message lists use LangGraph's `add_messages` reducer and are persisted by Sq
 
 ### Serialization constraint
 
-`SqliteSaver` serializes GraphState to JSON. All fields must contain JSON-safe values. `langchain_core.documents.Document` objects are NOT stored directly in state. Agent nodes serialize retrieved docs to `list[dict]` (via `doc.model_dump()`) before writing to state, and deserialize back to `Document` objects when reading. `Document.metadata` must contain only primitive types (str, int, float, list of primitives) — this is enforced at ingest time in `ChromaStore`.
+`SqliteSaver` serializes GraphState to JSON. All fields must contain JSON-safe values. `Document.metadata` must contain only primitive types (str, int, float, list of primitives) — enforced at ingest time in `ChromaStore`. Agents do not store raw `Document` objects in state.
 
 ### Typed metadata pointers
 
@@ -134,20 +137,15 @@ class GraphState(TypedDict, total=False):
     plan_messages:       Annotated[list[AnyMessage], add_messages]
     recommend_messages:  Annotated[list[AnyMessage], add_messages]
 
-    # ── New: cross-agent pipeline ────────────────────────────────────
-    # Stored as list[dict] (JSON-safe), NOT list[Document]
-    handoff_docs:        list[dict] | None
-    handoff_source:      str | None   # "deepread" / "notes" / etc.
-    handoff_turn_index:  int | None   # turn index when handoff was produced
+    # ── New: multi-agent pipeline ────────────────────────────────────
+    pending_agents:    list[str]
+    # Queue of agents yet to run in a compound request.
+    # e.g. ["recommend", "plan"] for "推荐一本书并生成读书计划"
+    # Supervisor pops the first item on each dispatch.
 
-    # Last retrieved docs per agent — serialized as list[dict] for JSON safety
-    deepread_last_docs:   list[dict] | None
-    notes_last_docs:      list[dict] | None
-    plan_last_docs:       list[dict] | None
-    recommend_last_docs:  list[dict] | None
-
-    # Turn index incremented by Supervisor each time it dispatches a new task
-    current_turn_index: int
+    compound_context:  str | None
+    # Accumulated text output from completed agents in the current pipeline.
+    # Injected into the next agent's task message for context.
 
     # ── New: action type ─────────────────────────────────────────────
     action: Literal["new", "edit", "extend"] | None
@@ -159,19 +157,15 @@ class GraphState(TypedDict, total=False):
     notes_last_output:  NoteOutputMeta | None
     plan_last_output:   PlanOutputMeta | None
 
-    # ── New: per-agent turn indices (for handoff staleness guard) ───
-    deepread_last_turn_index:   int | None
-    notes_last_turn_index:      int | None
-    plan_last_turn_index:       int | None
-    recommend_last_turn_index:  int | None
-
     # ── New: progress tracking ───────────────────────────────────────
     plan_progress: Annotated[list[str], lambda a, b: a + b]
-    # Accumulates explicitly completed section identifiers
+    # Accumulates explicitly completed section identifiers.
     # e.g. ["先验感性论", "先验分析论·概念分析论"]
-    # Uses list-append reducer so completed sections accumulate across turns
-    # Supervisor appends to this when it detects a progress-update intent
+    # Uses list-append reducer so sections accumulate across turns without overwriting.
+    # Supervisor appends when it detects a progress-update intent.
 ```
+
+**New fields summary:** 8 total (`*_messages` ×4, `pending_agents`, `compound_context`, `action`, `notes_last_output`, `plan_last_output`, `plan_progress`). No turn indices, no last_docs, no handoff fields.
 
 ---
 
@@ -185,10 +179,11 @@ class IntentSchema(BaseModel):
     action: Literal["new", "edit", "extend"] = "new"
     reason: str
     book_source: str | None = None
-    source_agent: Literal["deepread", "notes", "plan", "recommend"] | None = None
-    # Populated when user implies cross-agent pipeline AND most recent turn
-    # in that agent's messages list is the immediately preceding turn.
-    # e.g. "把这次精读做成笔记" → intent=notes, source_agent="deepread"
+    compound_intents: list[str] = []
+    # For compound single-message requests, lists all agents to run in order.
+    # e.g. "推荐一本康德的书并生成读书计划" → ["recommend", "plan"]
+    # e.g. "精读这一章并整理成笔记"         → ["deepread", "notes"]
+    # Empty for single-agent requests.
     notes_format: Literal["structured", "summary", "qa", "timeline"] | None = None
     recommend_type: Literal["discover", "similar", "next", "theme"] | None = None
     plan_type: Literal["single_deep", "multi_theme", "research"] | None = None
@@ -196,15 +191,14 @@ class IntentSchema(BaseModel):
     # True when user reports reading progress ("XX我读完了")
 ```
 
-### classify_intent Upgraded Signature
+### classify_intent Signature
 
 ```python
 def classify_intent(
     user_input: str,
     agent_last_turns: dict[str, str],
     # Keys: "deepread", "notes", "plan", "recommend"
-    # Values: last AIMessage content from that agent (empty string if none)
-    # Passed to LLM as context for detecting cross-agent references and edit intent
+    # Values: last AIMessage content from that agent (truncated to 300 chars; "" if none)
 ) -> IntentSchema: ...
 
 def _extract_agent_last_turns(state: GraphState) -> dict[str, str]:
@@ -212,7 +206,6 @@ def _extract_agent_last_turns(state: GraphState) -> dict[str, str]:
     result = {}
     for agent in ("deepread", "notes", "plan", "recommend"):
         msgs = state.get(f"{agent}_messages") or []
-        # Scan in reverse to find the most recent AIMessage
         last_ai = ""
         for m in reversed(msgs):
             if getattr(m, "type", None) == "ai":
@@ -222,73 +215,71 @@ def _extract_agent_last_turns(state: GraphState) -> dict[str, str]:
     return result
 ```
 
-**Prompt additions** (appended to existing prompt):
+**Prompt additions** (appended to existing classify_intent prompt):
 ```
 可参考的子 Agent 最近输出摘要（判断用户是否在引用上一轮结果）：
-- deepread 最近回复：{agent_last_turns["deepread"][:300]}
-- notes 最近回复：{agent_last_turns["notes"][:300]}
-- plan 最近回复：{agent_last_turns["plan"][:300]}
-- recommend 最近回复：{agent_last_turns["recommend"][:300]}
+- deepread 最近回复：{agent_last_turns["deepread"]}
+- notes 最近回复：{agent_last_turns["notes"]}
+- plan 最近回复：{agent_last_turns["plan"]}
+- recommend 最近回复：{agent_last_turns["recommend"]}
 
 额外判断规则：
-- 如果用户说"把这次精读/笔记/推荐...做成..."，source_agent 填对应 agent
+- 如果用户一句话要求多件事（如"推荐...并制定计划"），compound_intents 填完整链路，如 ["recommend","plan"]
 - 如果用户说"修改/更新/调整/把...改成..."，action=edit
 - 如果用户说"再加/继续/补充..."，action=extend
 - 如果用户说"XX章节我读完了/已读"，is_progress_update=true，intent=plan
+- 不支持动态扇出（如"每本书都做笔记"），此类请求 compound_intents 留空，在回复中说明需要分步操作
 ```
 
-### handoff_docs Staleness Guard
-
-Before populating `handoff_docs`, the supervisor validates that the source agent's last output is from the immediately preceding turn:
+### Supervisor Routing Logic
 
 ```python
-# In supervisor_node — returns delta dict, NOT mutated state
-
 def supervisor_node(state: GraphState) -> dict:
-    # ... safety check, intent classification ...
+    # 1. Safety check (unchanged)
+    # 2. Intent classification
+    agent_last_turns = _extract_agent_last_turns(state)
+    result = classify_intent(user_input, agent_last_turns)
 
-    patch = {
-        "intent": result.intent,
-        "action": result.action,
-        "current_turn_index": (state.get("current_turn_index") or 0) + 1,
-    }
+    patch = {"intent": result.intent, "action": result.action}
 
-    # Staleness guard for cross-agent handoff
-    if result.source_agent:
-        source_last_turn = state.get(f"{result.source_agent}_last_turn_index")
-        current_turn = state.get("current_turn_index") or 0
-        if source_last_turn is not None and current_turn - source_last_turn <= 1:
-            # Immediately preceding turn — handoff is fresh
-            patch["handoff_docs"] = state.get(f"{result.source_agent}_last_docs")
-            patch["handoff_source"] = result.source_agent
-            patch["handoff_turn_index"] = source_last_turn
-        else:
-            # Stale or missing — do not populate handoff, agent will do its own retrieval
-            patch["handoff_docs"] = None
-            patch["handoff_source"] = None
-
-    # Progress update path
-    if result.is_progress_update:
-        # Extract completed section from user_input; append to plan_progress
-        # (exact extraction delegated to ReadingPlanAgent)
-        patch["plan_query"] = user_input
-        patch["plan_messages"] = [HumanMessage(content=user_input)]
-        patch["next"] = "plan"
+    # 3. answer already present → finalize
+    if state.get("answer"):
+        patch["next"] = "finalize"
         return patch
 
-    # Normal dispatch — write HumanMessage as delta to target agent's messages
-    task_msg = HumanMessage(content=build_task_message(user_input, result))
-    if result.intent == "notes":
+    # 4. Compound pipeline init: fill pending_agents on first dispatch
+    pending = list(state.get("pending_agents") or [])
+    if result.compound_intents and not pending:
+        pending = list(result.compound_intents)
+        patch["pending_agents"] = pending
+        patch["compound_context"] = None
+
+    # 5. Determine which agent to dispatch next
+    if pending:
+        target = pending.pop(0)
+        patch["pending_agents"] = pending   # updated queue (one item consumed)
+    else:
+        target = result.intent
+
+    # 6. Build task message — inject compound_context from previous agent if present
+    task_content = user_input
+    ctx = state.get("compound_context")
+    if ctx:
+        task_content += f"\n\n【前序步骤结果，供参考】：\n{ctx}"
+    task_msg = HumanMessage(content=task_content)
+
+    # 7. Dispatch to target agent
+    if target == "notes":
         patch["notes_messages"] = [task_msg]
         patch["notes_query"] = user_input
         patch["notes_book_source"] = result.book_source or state.get("book_source")
         patch["next"] = "notes"
-    elif result.intent == "plan":
+    elif target == "plan":
         patch["plan_messages"] = [task_msg]
         patch["plan_query"] = user_input
         patch["plan_book_source"] = result.book_source or state.get("book_source")
         patch["next"] = "plan"
-    elif result.intent == "recommend":
+    elif target == "recommend":
         patch["recommend_messages"] = [task_msg]
         patch["recommend_query"] = user_input
         patch["next"] = "recommend"
@@ -298,17 +289,32 @@ def supervisor_node(state: GraphState) -> dict:
         patch["deepread_book_source"] = result.book_source or state.get("book_source")
         patch["next"] = "deepread"
 
+    # 8. Progress update path
+    if result.is_progress_update:
+        patch["plan_messages"] = [task_msg]
+        patch["plan_query"] = user_input
+        patch["next"] = "plan"
+
     return patch
 ```
 
-**Key rule:** All supervisor and agent node functions return **delta dicts** (the patch), not the full mutated state. The `add_messages` reducer on `Annotated[list[AnyMessage], add_messages]` fields accumulates correctly when the delta contains a list value.
+### After Each Agent: Update compound_context
+
+Each agent node appends its output summary to `compound_context`. The Supervisor reads this on the next iteration to inject context into the next agent's task:
+
+```python
+# Pattern in every agent node's return delta:
+existing_ctx = state.get("compound_context") or ""
+agent_label  = "推荐结果"   # or "精读结果", "笔记结果", "计划结果"
+new_ctx = (existing_ctx + f"\n\n[{agent_label}]\n{content[:500]}").strip()
+patch["compound_context"] = new_ctx
+```
 
 ### finalize Node
 
-`_finalize` is a **closure** defined inside `build_minimal_supervisor_graph`, capturing `deps` from the enclosing scope. It is not a module-level function.
+`_finalize` is a **closure** defined inside `build_minimal_supervisor_graph`, capturing `deps`.
 
 ```python
-# Inside build_minimal_supervisor_graph():
 def _finalize(state: GraphState) -> dict:
     patch = {"next": "end"}
     if state.get("answer"):
@@ -340,32 +346,56 @@ def run(
     notes_messages: list[AnyMessage] | None = None,
     action: Literal["new", "edit", "extend"] = "new",
     notes_format: Literal["structured", "summary", "qa", "timeline"] = "structured",
-    handoff_docs: list[dict] | None = None,
     storage_path: str | None = None,   # required when action=edit or action=extend
 ) -> NoteResult: ...
 ```
 
-`notes_node()` reads `storage_path` from state before calling `run()`. It accepts `deps` and `thread_id` passed in by the `_notes` closure (see Section 3 finalize pattern):
+`_notes` closure passes `deps` and `thread_id`; `notes_node` is module-level and testable:
+
 ```python
+# Inside build_minimal_supervisor_graph():
+def _notes(state: GraphState, config: RunnableConfig) -> dict:
+    thread_id = config["configurable"].get("thread_id", "default")
+    return notes_node(state, agent=deps.notes_agent, deps=deps, thread_id=thread_id)
+
+# Module-level:
 def notes_node(state, *, agent, deps, thread_id) -> dict:
     last = state.get("notes_last_output") or {}
-    return agent.run(
-        ...,
-        action=state.get("action") or "new",
-        storage_path=last.get("storage_path"),   # None for action=new
-        handoff_docs=state.get("handoff_docs"),
+    result = agent.run(
+        query=state.get("notes_query") or state.get("user_input") or "",
+        book_source=state.get("notes_book_source") or state.get("book_source"),
+        raw_text=state.get("notes_raw_text"),
+        memory_context=state.get("memory_context") or "",
         notes_messages=state.get("notes_messages") or [],
+        action=state.get("action") or "new",
+        storage_path=last.get("storage_path"),
+        notes_format=...,   # from IntentSchema, passed via state or default
     )
+    content = result.answer
+    note_id = f"note_{thread_id}_{int(datetime.utcnow().timestamp())}"
+    storage_path = deps.note_storage.save(content, note_id)
+    existing_ctx = state.get("compound_context") or ""
+    return {
+        "answer": content,
+        "citations": result.citations,
+        "retrieved_docs_count": len(result.retrieved_docs),
+        "notes_last_output": NoteOutputMeta(
+            note_id=note_id, book_title=..., topics=...,
+            storage_path=storage_path, created_at=datetime.utcnow().isoformat(),
+        ),
+        "notes_messages": [AIMessage(content=content)],
+        "compound_context": (existing_ctx + f"\n\n[笔记结果]\n{content[:500]}").strip(),
+    }
 ```
 
 **Multi-turn editing logic:**
 ```
-action=new    → retrieve via HybridRetriever (or use handoff_docs) → generate fresh note
+action=new    → retrieve via HybridRetriever → generate fresh note
 action=extend → load full note from NoteStorage via storage_path → append new section
 action=edit   → load full note from NoteStorage via storage_path → modify specified section
 ```
 
-`storage_path` is `None` when `action=new`. If `action=edit/extend` and `storage_path` is `None` (no prior note in this session), fall back to `action=new`.
+If `action=edit/extend` and `storage_path` is `None`, fall back to `action=new`.
 
 **Note templates:**
 
@@ -378,43 +408,7 @@ action=edit   → load full note from NoteStorage via storage_path → modify sp
 
 **Retrieval:** HybridRetriever (BM25 + vector), same config as DeepReadAgent. Constructed once in `__init__`.
 
-**Cross-book synthesis:** When `book_source=None` and `handoff_docs=None`, retrieve across all books and generate comparative notes.
-
-**NoteStorage integration (node-level):**
-
-`_notes` is a **closure** inside `build_minimal_supervisor_graph` that wraps `notes_node`, giving it access to `deps` and `thread_id` (from `RunnableConfig`). Pattern:
-
-```python
-# Inside build_minimal_supervisor_graph():
-def _notes(state: GraphState, config: RunnableConfig) -> dict:
-    thread_id = config["configurable"].get("thread_id", "default")
-    patch = notes_node(state, agent=deps.notes_agent, deps=deps, thread_id=thread_id)
-    return patch
-
-# notes_node (module-level, testable):
-def notes_node(state, *, agent, deps, thread_id) -> dict:
-    ...
-    content = result.answer
-    note_id = f"note_{thread_id}_{int(datetime.utcnow().timestamp())}"
-    storage_path = deps.note_storage.save(content, note_id)
-    return {
-        "answer": content,
-        "citations": result.citations,
-        "retrieved_docs_count": len(result.retrieved_docs),
-        "notes_last_output": NoteOutputMeta(
-            note_id=note_id,
-            book_title=...,
-            topics=...,
-            storage_path=storage_path,
-            created_at=datetime.utcnow().isoformat(),
-        ),
-        "notes_last_docs": [d.model_dump() for d in result.retrieved_docs],
-        "notes_last_turn_index": state.get("current_turn_index") or 0,
-        "notes_messages": [AIMessage(content=content)],
-    }
-```
-
-The same closure pattern applies to `_plan` / `plan_node`.
+**Cross-book synthesis:** When `book_source=None`, retrieve across all books and generate comparative notes.
 
 ---
 
@@ -433,12 +427,11 @@ def run(
     memory_context: str = "",
     recommend_messages: list[AnyMessage] | None = None,
     recommend_type: Literal["discover", "similar", "next", "theme"] = "discover",
-    handoff_docs: list[dict] | None = None,
 ) -> RecommendationResult: ...
 ```
 
 **Multi-turn awareness:**
-Parse `recommend_messages` to extract previously recommended titles → pass as exclusion list to LLM. Detect feedback patterns ("太难了" / "再来几本") and adjust `recommend_type` internally.
+Parse `recommend_messages` to extract previously recommended titles → pass as exclusion list to LLM. Detect feedback patterns ("太难了" / "再来几本") and adjust strategy internally.
 
 **Global book catalog view with caching:**
 ```python
@@ -452,9 +445,9 @@ def _get_catalog_summary(self) -> str:
     return summary
 
 def _build_catalog_summary(self, sources: list[str]) -> str:
-    # Single similarity_search per book with a generic query ("introduction overview")
-    # and source filter, limit=2 — results in at most 30 queries total at agent init.
-    # Each book contributes a one-line entry: "《title》 / author — snippet[:100]"
+    # One similarity_search per book (generic query, k=2, source filter)
+    # Each book → one line: "《title》/ author — snippet[:100]"
+    # Cap at 30 books → at most 30 queries total
     lines = []
     for source in sources:
         docs = self.store.similarity_search("introduction overview", k=2,
@@ -481,13 +474,13 @@ def _build_catalog_summary(self, sources: list[str]) -> str:
 
 **Node writes back to state:**
 ```python
+existing_ctx = state.get("compound_context") or ""
 return {
     "answer": result.answer,
     "citations": result.citations,
     "retrieved_docs_count": len(result.retrieved_docs),
-    "recommend_last_docs": [d.model_dump() for d in result.retrieved_docs],
-    "recommend_last_turn_index": state.get("current_turn_index") or 0,
     "recommend_messages": [AIMessage(content=result.answer)],
+    "compound_context": (existing_ctx + f"\n\n[推荐结果]\n{result.answer[:500]}").strip(),
 }
 ```
 
@@ -510,25 +503,12 @@ def run(
     plan_messages: list[AnyMessage] | None = None,
     action: Literal["new", "edit", "extend"] = "new",
     plan_type: Literal["single_deep", "multi_theme", "research"] = "single_deep",
-    handoff_docs: list[dict] | None = None,
-    storage_path: str | None = None,   # required when action=edit or action=extend
-    plan_progress: list[str] | None = None,  # completed section identifiers
+    storage_path: str | None = None,
+    plan_progress: list[str] | None = None,
 ) -> ReadingPlanResult: ...
 ```
 
-`plan_node()` reads `storage_path` and `plan_progress` from state before calling `run()`. It accepts `deps` and `thread_id` passed in by the `_plan` closure (same pattern as `notes_node`):
-```python
-def plan_node(state, *, agent, deps, thread_id) -> dict:
-    last = state.get("plan_last_output") or {}
-    return agent.run(
-        ...,
-        action=state.get("action") or "new",
-        storage_path=last.get("storage_path"),
-        plan_progress=state.get("plan_progress") or [],
-        handoff_docs=state.get("handoff_docs"),
-        plan_messages=state.get("plan_messages") or [],
-    )
-```
+`plan_node` follows the same closure pattern as `notes_node`, reads `storage_path` from `plan_last_output` and `plan_progress` from state.
 
 **Multi-turn plan editing:**
 ```
@@ -536,6 +516,8 @@ action=new    → generate fresh plan → save via PlanStorage
 action=edit   → load plan from PlanStorage via storage_path → modify → save new version
 action=extend → load plan → add books or extend timeline → save new version
 ```
+
+If `action=edit/extend` and `storage_path` is `None`, fall back to `action=new`.
 
 **Real chapter structure extraction:**
 ```python
@@ -556,66 +538,86 @@ Reading time formula: Chinese ~300 chars/min, English ~200 words/min.
 | `research` | Research a topic | Key chapters across books + annotation targets |
 
 **Progress tracking:**
-`plan_progress` is a `list[str]` of completed section identifiers passed in from GraphState. When `action=new/edit/extend`, the agent filters out completed sections from the schedule. When the supervisor detects `is_progress_update=True`, it routes to the plan agent which extracts the completed section name from user input and appends it to `plan_progress` in the returned delta.
+`plan_progress` is a `list[str]` of completed section identifiers. When `action=new/edit/extend`, the agent filters out completed sections from the schedule. When the supervisor detects `is_progress_update=True`, it routes to the plan agent which extracts the section name from user input and appends it to `plan_progress` in the returned delta.
 
 **Node writes back to state:**
 ```python
-content = result.answer
-plan_id = f"plan_{thread_id}_{timestamp}"
-storage_path = deps.plan_storage.save(content, plan_id)
+# Inside plan_node (module-level, called by _plan closure):
+existing_ctx = state.get("compound_context") or ""
 return {
     "answer": content,
     "citations": result.citations,
     "retrieved_docs_count": len(result.retrieved_docs),
     "plan_last_output": PlanOutputMeta(
-        plan_id=plan_id,
-        book_titles=...,
-        plan_type=plan_type,
-        storage_path=storage_path,
-        created_at=datetime.utcnow().isoformat(),
+        plan_id=plan_id, book_titles=..., plan_type=plan_type,
+        storage_path=storage_path, created_at=datetime.utcnow().isoformat(),
         progress_summary=f"{len(plan_progress or [])} sections completed",
     ),
-    "plan_last_docs": [d.model_dump() for d in result.retrieved_docs],
-    "plan_last_turn_index": state.get("current_turn_index") or 0,
     "plan_messages": [AIMessage(content=content)],
-    # Append newly completed section if this was a progress update:
-    "plan_progress": newly_completed_sections or [],  # add_messages-style append via reducer
+    "plan_progress": newly_completed_sections or [],   # append reducer
+    "compound_context": (existing_ctx + f"\n\n[计划结果]\n{content[:500]}").strip(),
 }
 ```
 
-> Note: `plan_progress` needs a list-append reducer in GraphState (`Annotated[list[str], lambda a, b: a + b]`) so sections accumulate across turns without overwriting.
-
 ---
 
-## Section 5: Cross-Agent Pipeline
+## Section 5: Multi-Agent Pipeline
 
-### Trigger examples
+### Supported compound scenarios
 
-| User says | Supervisor detects | Pipeline |
+| User says | compound_intents | Notes |
 |---|---|---|
-| "把这次精读做成笔记" | intent=notes, source_agent="deepread" | deepread_last_docs → NoteAgent |
-| "根据刚才的推荐制定计划" | intent=plan, source_agent="recommend" | recommend_last_docs → ReadingPlanAgent |
+| "推荐一本康德的书并生成读书计划" | `["recommend", "plan"]` | recommend output → injected as context into plan task |
+| "精读这一章并整理成笔记" | `["deepread", "notes"]` | deepread output → injected into notes task |
+| "推荐几本书，挑一本做精读" | `["recommend", "deepread"]` | recommend narrows scope; deepread uses context |
+| "把精读做成笔记再更新阅读计划" | `["deepread", "notes", "plan"]` | three-step chain |
+| "把这次精读做成笔记"（精读已完成） | `[]` (single: notes) | deepread output in `agent_last_turns` → injected automatically |
 
-### Staleness rule
-
-`source_agent` is only trusted when `{source_agent}_last_turn_index == current_turn_index - 1` (immediately preceding turn). Otherwise `handoff_docs` is set to `None` and the target agent performs its own retrieval.
-
-### Data flow
+### How context flows between agents
 
 ```
-Agent node finishes:
-  patch["deepread_last_docs"] = [d.model_dump() for d in docs]   # JSON-safe
-  patch["deepread_last_turn_index"] = current_turn_index
+Step 1: Supervisor dispatches recommend
+  pending_agents = ["plan"]
+  compound_context = None
 
-Supervisor detects cross-agent (fresh):
-  patch["handoff_docs"] = state["deepread_last_docs"]       # already list[dict]
-  patch["handoff_source"] = "deepread"
+Step 2: recommend node runs
+  answer = "推荐《判断力批判》，因为..."
+  compound_context = "[推荐结果]\n推荐《判断力批判》，因为..."
 
-Target agent run():
-  if handoff_docs:
-      docs = [Document(**d) for d in handoff_docs]  # deserialize
-  else:
-      docs = self.retriever.search(query, filter=filter_)
+Step 3: Supervisor dispatches plan
+  pending_agents = []
+  task_msg = "生成读书计划\n\n【前序步骤结果，供参考】：\n[推荐结果]\n推荐《判断力批判》..."
+  plan_messages += [HumanMessage(task_msg)]
+
+Step 4: plan node runs with full context
+  → Generates plan specifically for 《判断力批判》
+
+Step 5: finalize
+  → Synthesizes both outputs into a single final answer
+```
+
+### Unsupported: dynamic fan-out
+
+Requests like "推荐三本书，每本都做笔记" require N note operations for N recommended books. This is not supported — the Supervisor responds: "我可以先推荐，然后你告诉我要对哪本书做笔记。" (`compound_intents` left empty, `intent = "recommend"`).
+
+### Finalize: synthesizing compound results
+
+When `pending_agents` is empty and multiple agents have run, `_finalize` uses `compound_context` to synthesize a unified response rather than just returning the last agent's answer:
+
+```python
+def _finalize(state: GraphState) -> dict:
+    patch = {"next": "end"}
+    answer = state.get("answer") or ""
+    ctx = state.get("compound_context") or ""
+    # If multiple agents ran, synthesize a unified response
+    if ctx and ctx.count("[") > 1:   # more than one agent result in context
+        answer = _synthesize_compound_answer(state["user_input"], ctx, answer)
+        patch["answer"] = answer
+    if answer:
+        patch["messages"] = [AIMessage(content=answer)]
+    if deps.mem0 and answer and state.get("user_input"):
+        deps.mem0.add_qa(state["user_input"], answer)
+    return patch
 ```
 
 ---
@@ -630,7 +632,7 @@ Target agent run():
 class NoteStorage(Protocol):
     def save(self, content: str, note_id: str) -> str: ...   # returns storage_path
     def load(self, storage_path: str) -> str: ...
-    def list(self, prefix: str = "") -> list[str]: ...       # list storage_paths
+    def list(self, prefix: str = "") -> list[str]: ...
     def delete(self, storage_path: str) -> None: ...
 
 class LocalNoteStorage:
@@ -690,9 +692,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 checkpointer = SqliteSaver.from_conn_string("data/checkpoints.db")
 ```
 
-**Dependency note:** `langgraph-checkpoint-sqlite` must be added to `requirements.txt` as a separate PyPI package. Verify the exact API (`from_conn_string` vs constructor) against the pinned LangGraph version in `requirements.txt` before implementation.
-
-All GraphState fields (per-agent message lists, metadata pointers, progress lists) are automatically persisted under `thread_id`. Process restarts do not lose conversation history.
+**Dependency note:** Add `langgraph-checkpoint-sqlite` to `requirements.txt`. Verify the exact API (`from_conn_string` vs constructor) against the pinned LangGraph version before implementation.
 
 ---
 
@@ -710,11 +710,11 @@ PLAN_STORAGE_DIR=data/plans
 
 | File | Change |
 |---|---|
-| `backend/agents/orchestrator_agent.py` | GraphState: ~15 new fields incl. typed metadata, turn indices, plan_progress; IntentSchema: 4 new fields; classify_intent: new signature + prompt; Supervisor: delta-return pattern, staleness guard, progress update path; finalize: delta-return, writes to messages; SqliteSaver; GraphDeps adds storage |
-| `backend/agents/note_agent.py` | Accept notes_messages + action + notes_format + handoff_docs + storage_path; HybridRetriever in __init__; action mode branching; NoteStorage integration in notes_node |
-| `backend/agents/recommendation_agent.py` | Accept recommend_messages + recommend_type + handoff_docs; HybridRetriever in __init__; catalog cache; repeat-avoidance; structured Mem0 preference injection |
-| `backend/agents/reading_plan_agent.py` | Accept plan_messages + action + plan_type + handoff_docs + storage_path + plan_progress; HybridRetriever in __init__; chapter structure extraction; word-count time estimation; action mode branching; PlanStorage integration in plan_node |
-| `backend/agents/deepread_agent.py` | deepread_node writes deepread_last_docs + deepread_last_turn_index to returned delta |
+| `backend/agents/orchestrator_agent.py` | GraphState: 8 new fields (messages×4, pending_agents, compound_context, action, metadata pointers, plan_progress); IntentSchema: compound_intents replaces source_agent; classify_intent: new signature + prompt; Supervisor: pending_agents queue, compound_context injection, delta-return; finalize: compound synthesis; SqliteSaver; GraphDeps adds storage |
+| `backend/agents/note_agent.py` | Accept notes_messages + action + notes_format + storage_path; HybridRetriever in __init__; action mode branching; NoteStorage integration in notes_node; writes compound_context |
+| `backend/agents/recommendation_agent.py` | Accept recommend_messages + recommend_type; HybridRetriever in __init__; catalog cache; repeat-avoidance; Mem0 preference injection; writes compound_context |
+| `backend/agents/reading_plan_agent.py` | Accept plan_messages + action + plan_type + storage_path + plan_progress; HybridRetriever in __init__; chapter extraction; time estimation; action mode branching; PlanStorage integration; writes compound_context |
+| `backend/agents/deepread_agent.py` | deepread_node writes compound_context to returned delta |
 | `backend/storage/note_storage.py` | New: NoteStorage Protocol + LocalNoteStorage + S3NoteStorage stub |
 | `backend/storage/plan_storage.py` | New: PlanStorage Protocol + LocalPlanStorage + S3PlanStorage stub |
 | `backend/storage/__init__.py` | New |
