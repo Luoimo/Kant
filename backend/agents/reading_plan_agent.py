@@ -134,6 +134,10 @@ class ReadingPlanAgent:
         if action in ("edit", "extend") and storage_path and self.plan_storage:
             try:
                 existing_plan = self.plan_storage.load(storage_path)
+            except Exception as e:
+                print(f"[ReadingPlanAgent] load failed, degrading to new: {e}", file=sys.stdout)
+                action = "new"
+            else:
                 return self._modify_plan(
                     query=query,
                     existing_plan=existing_plan,
@@ -143,9 +147,6 @@ class ReadingPlanAgent:
                     plan_messages=plan_messages,
                     plan_progress=plan_progress,
                 )
-            except Exception as e:
-                print(f"[ReadingPlanAgent] load failed, degrading to new: {e}", file=sys.stdout)
-                action = "new"
 
         # 路径 2：new — 检索 + 生成
         return self._generate_new_plan(

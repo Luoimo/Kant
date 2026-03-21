@@ -96,6 +96,10 @@ class NoteAgent:
         if action in ("edit", "extend") and storage_path and self.note_storage:
             try:
                 existing_note = self.note_storage.load(storage_path)
+            except Exception as e:
+                print(f"[NoteAgent] load failed, degrading to new: {e}", file=sys.stdout)
+                action = "new"
+            else:
                 return self._modify_note(
                     query=query,
                     existing_note=existing_note,
@@ -104,9 +108,6 @@ class NoteAgent:
                     memory_context=memory_context,
                     notes_messages=notes_messages,
                 )
-            except Exception as e:
-                print(f"[NoteAgent] load failed, degrading to new: {e}", file=sys.stdout)
-                action = "new"
 
         # 路径 2：raw_text-only（无 book_source，跳过检索）
         if raw_text and not book_source:
