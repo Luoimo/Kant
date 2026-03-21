@@ -251,14 +251,22 @@ def notes_node(
     )
     content = result.answer
 
-    # 持久化笔记
+    # 持久化笔记（edit/extend 复用已有路径；new 创建新路径；失败静默降级）
     storage_path_out: str | None = None
     note_id = f"note_{thread_id}_{int(datetime.now(tz=timezone.utc).timestamp())}"
     note_storage = getattr(deps, "note_storage", None) if deps else None
     if not note_storage:
         note_storage = agent.note_storage
     if note_storage:
-        storage_path_out = note_storage.save(content, note_id)
+        try:
+            if action in ("edit", "extend") and storage_path:
+                note_storage.update(storage_path, content)
+                storage_path_out = storage_path
+            else:
+                storage_path_out = note_storage.save(content, note_id)
+        except Exception as e:
+            print(f"[notes_node] storage failed: {e}", file=sys.stdout)
+            storage_path_out = None
 
     # 提取书名
     book_title = ""

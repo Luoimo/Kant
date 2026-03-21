@@ -383,14 +383,22 @@ def plan_node(
     )
     content = result.answer
 
-    # 持久化计划
+    # 持久化计划（edit/extend 复用已有路径；new 创建新路径；失败静默降级）
     storage_path_out: str | None = None
     plan_id = f"plan_{thread_id}_{int(datetime.now(tz=timezone.utc).timestamp())}"
     plan_storage = getattr(deps, "plan_storage", None) if deps else None
     if not plan_storage:
         plan_storage = agent.plan_storage
     if plan_storage:
-        storage_path_out = plan_storage.save(content, plan_id)
+        try:
+            if action in ("edit", "extend") and storage_path:
+                plan_storage.update(storage_path, content)
+                storage_path_out = storage_path
+            else:
+                storage_path_out = plan_storage.save(content, plan_id)
+        except Exception as e:
+            print(f"[plan_node] storage failed: {e}", file=sys.stdout)
+            storage_path_out = None
 
     # 检测新完成章节（当 is_progress_update 模式下，提取 query 中的章节名）
     newly_completed: list[str] = []

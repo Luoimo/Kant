@@ -118,3 +118,41 @@ class TestPlanNode:
         patch_dict = plan_node(state, agent=agent)
 
         assert "answer" in patch_dict
+
+
+class TestPlanNodeStorage:
+    def _make_state(self, action="new", storage_path=""):
+        return {
+            "user_input": "制定计划",
+            "action": action,
+            "plan_last_output": {"storage_path": storage_path},
+            "plan_messages": [],
+            "memory_context": "",
+        }
+
+    def test_new_action_calls_save(self, mock_store, mock_llm):
+        storage = MagicMock()
+        storage.save.return_value = "local/plan_001.md"
+        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
+        state = self._make_state(action="new")
+        plan_node(state, agent=agent)
+        storage.save.assert_called_once()
+        storage.update.assert_not_called()
+
+    def test_edit_action_calls_update_when_storage_path_exists(self, mock_store, mock_llm):
+        storage = MagicMock()
+        storage.load.return_value = "# Old Plan"
+        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
+        state = self._make_state(action="edit", storage_path="existing-page-id")
+        plan_node(state, agent=agent)
+        storage.update.assert_called_once_with("existing-page-id", mock_llm.invoke.return_value.content)
+        storage.save.assert_not_called()
+
+    def test_save_failure_does_not_raise(self, mock_store, mock_llm):
+        storage = MagicMock()
+        storage.save.side_effect = ConnectionError("Notion down")
+        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
+        state = self._make_state(action="new")
+        result = plan_node(state, agent=agent)
+        assert result["plan_last_output"]["storage_path"] == ""
+        assert result["answer"]  # answer is still returned
