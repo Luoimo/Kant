@@ -9,7 +9,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, AnyMessage
 
 from backend.config import get_settings
-from backend.llm.openai_client import get_llm
+from backend.llm.openai_client import get_llm, build_messages_context
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.rag.retriever import HybridConfig, HybridRetriever
 from backend.storage.note_storage import NoteStorage, LocalNoteStorage
@@ -158,7 +158,7 @@ class NoteAgent:
         if memory_context:
             system += "\n\n【用户历史阅读记录（仅供参考）】\n" + memory_context
 
-        messages_ctx = self._build_messages_context(notes_messages)
+        messages_ctx = build_messages_context(notes_messages)
         msg = self.llm.invoke(messages_ctx + [
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
@@ -208,23 +208,13 @@ class NoteAgent:
         if memory_context:
             system += "\n\n【用户历史阅读记录（仅供参考）】\n" + memory_context
 
-        messages_ctx = self._build_messages_context(notes_messages)
+        messages_ctx = build_messages_context(notes_messages)
         msg = self.llm.invoke(messages_ctx + [
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
         ])
         return getattr(msg, "content", str(msg))
 
-    @staticmethod
-    def _build_messages_context(notes_messages: list[AnyMessage] | None) -> list[dict]:
-        """将 notes_messages 历史转为 LLM messages 格式（最多保留最近 4 条）。"""
-        if not notes_messages:
-            return []
-        history = []
-        for m in notes_messages[-4:]:
-            role = "assistant" if getattr(m, "type", "") == "ai" else "user"
-            history.append({"role": role, "content": getattr(m, "content", "")})
-        return history
 
 
 def notes_node(
@@ -240,7 +230,6 @@ def notes_node(
     """
     query: str = state.get("notes_query", "") or state.get("user_input", "")
     book_source: str | None = state.get("notes_book_source") or state.get("book_source")
-    raw_text: str | None = state.get("notes_raw_text")
     memory_context: str = state.get("memory_context", "") or ""
     notes_messages: list[AnyMessage] = state.get("notes_messages") or []
     action = state.get("action") or "new"
@@ -250,7 +239,6 @@ def notes_node(
     result = agent.run(
         query=query,
         book_source=book_source,
-        raw_text=raw_text,
         memory_context=memory_context,
         notes_messages=notes_messages,
         action=action,
@@ -273,7 +261,7 @@ def notes_node(
         book_title = (result.retrieved_docs[0].metadata or {}).get("book_title", "")
 
     existing_ctx = state.get("compound_context") or ""
-    new_ctx = (existing_ctx + f"\n\n[笔记结果]\n{content[:500]}").strip()
+    new_ctx = (existing_ctx + f"\n\n[笔记结果]\n{content[:1500]}").strip()
 
     return {
         "answer": content,

@@ -15,8 +15,6 @@ from backend.llm.openai_client import get_llm
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.xai.citation import Citation
 
-sep = "\n\n"
-
 RECOMMEND_SYSTEM_PROMPT = """你是"深度阅读顾问（RecommendationAgent）"。
 
 你的职责是基于自身知识，为用户推荐值得精读的书籍——不限于用户当前书库，从整个出版物世界中推荐。
@@ -194,7 +192,7 @@ def recommend_node(state: dict[str, Any], *, agent: RecommendationAgent) -> dict
     )
     content = result.answer
     existing_ctx = state.get("compound_context") or ""
-    new_ctx = (existing_ctx + f"\n\n[推荐结果]\n{content[:500]}").strip()
+    new_ctx = (existing_ctx + f"\n\n[推荐结果]\n{content[:1500]}").strip()
 
     return {
         "answer": content,

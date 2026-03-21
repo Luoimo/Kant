@@ -1,6 +1,7 @@
 # _*_ coding:utf-8 _*_
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -93,7 +94,7 @@ class HybridRetriever:
             QueryRewriter(llm=llm) if self.config.enable_query_rewrite else None
         )
         self._reranker = self._build_reranker(llm)
-        self._bm25: BM25Retriever | None = None  # 懒加载
+        self._bm25_cache: dict[str, BM25Retriever] = {}  # filter_key → BM25Retriever
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -158,17 +159,22 @@ class HybridRetriever:
     # 内部
     # ------------------------------------------------------------------
 
+    def invalidate_bm25(self) -> None:
+        """入库新书后调用，清除所有 BM25 缓存，下次查询时重建。"""
+        self._bm25_cache.clear()
+
     def _get_bm25(self, filter: dict | None) -> BM25Retriever:
-        """懒加载 BM25 索引；同一 source 过滤条件只构建一次。"""
-        if self._bm25 is None:
-            logger.info("构建 BM25 索引（collection=%s）...", self._collection_name)
+        """按 filter 分开缓存 BM25 索引，不同书源互不污染。"""
+        cache_key = json.dumps(filter, sort_keys=True) if filter else "__all__"
+        if cache_key not in self._bm25_cache:
+            logger.info("构建 BM25 索引（collection=%s, filter=%s）...", self._collection_name, cache_key)
             docs = self._store.get_all_documents(
                 collection_name=self._collection_name,
                 filter=filter,
             )
-            self._bm25 = BM25Retriever(docs)
-            logger.info("BM25 索引就绪，共 %d 个 chunk", len(docs))
-        return self._bm25
+            self._bm25_cache[cache_key] = BM25Retriever(docs)
+            logger.info("BM25 索引就绪，共 %d 个 chunk（key=%s）", len(docs), cache_key)
+        return self._bm25_cache[cache_key]
 
     def _build_reranker(self, llm):
         mode = self.config.reranker

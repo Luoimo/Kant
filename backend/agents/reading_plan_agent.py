@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -9,7 +10,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, AnyMessage
 
 from backend.config import get_settings
-from backend.llm.openai_client import get_llm
+from backend.llm.openai_client import get_llm, build_messages_context
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.rag.retriever import HybridConfig, HybridRetriever
 from backend.storage.plan_storage import PlanStorage, LocalPlanStorage
@@ -181,7 +182,7 @@ class ReadingPlanAgent:
         if memory_context:
             system += "\n\n【用户历史阅读记录（仅供参考）】\n" + memory_context
 
-        history = self._build_messages_context(plan_messages)
+        history = build_messages_context(plan_messages)
         msg = self.llm.invoke(
             history + [
                 {"role": "system", "content": system},
@@ -211,20 +212,26 @@ class ReadingPlanAgent:
         except Exception as e:
             print(f"[ReadingPlanAgent] list_sources failed: {e}", file=sys.stdout)
 
-        # 检索相关 chunks
-        filter_ = {"source": book_source} if book_source else None
-        docs = self._retriever.search(query, filter=filter_) if (book_source or available_sources) else []
-        citations = build_citations(docs)
-
-        # 如果指定了书源，提取章节结构
+        # 如果指定了书源，提取章节结构；同时判断书是否在库中
         chapters: list[ChapterInfo] = []
+        book_in_library = False
         if book_source:
             chapters = self._extract_chapter_structure(book_source)
+            book_in_library = bool(chapters) or any(book_source in s for s in available_sources)
+
+        # 检索相关 chunks：仅当书在库中（或未指定书源）时才检索
+        # 避免 BM25 缓存污染：若指定书源但不在库，跳过检索（BM25 索引可能是其他书的缓存）
+        filter_ = {"source": book_source} if book_source else None
+        if book_source and not book_in_library:
+            docs: list[Document] = []
+        else:
+            docs = self._retriever.search(query, filter=filter_) if (book_source or available_sources) else []
+        citations = build_citations(docs)
 
         print(
             f"[ReadingPlanAgent] query={query!r}, book_source={book_source!r}, "
             f"plan_type={plan_type}, available={len(available_sources)}, hits={len(docs)}, "
-            f"chapters={len(chapters)}",
+            f"chapters={len(chapters)}, in_library={book_in_library}",
             file=sys.stdout,
         )
 
@@ -234,6 +241,7 @@ class ReadingPlanAgent:
             available_sources=available_sources,
             book_source=book_source,
             chapters=chapters,
+            book_in_library=book_in_library,
             memory_context=memory_context,
             plan_messages=plan_messages,
             plan_type=plan_type,
@@ -248,6 +256,7 @@ class ReadingPlanAgent:
         available_sources: list[str],
         book_source: str | None,
         chapters: list[ChapterInfo],
+        book_in_library: bool = False,
         memory_context: str = "",
         plan_messages: list[AnyMessage] | None = None,
         plan_type: Literal["single_deep", "multi_theme", "research"] = "single_deep",
@@ -287,6 +296,15 @@ class ReadingPlanAgent:
             else "（书库暂无可用书目，请根据用户需求制定通用阅读计划）"
         )
 
+        # 书不在库中时，基于 LLM 通用知识生成，并附加提示
+        not_in_library_note = ""
+        if book_source and not book_in_library:
+            not_in_library_note = (
+                f"\n\n> 💡 **注**：《{book_source}》目前不在本地书库中，"
+                "以下计划基于通用知识生成，缺少实际章节结构和字数数据。"
+                f"上传该书的 EPUB 后，可重新生成含精确章节安排和阅读时间的计划。"
+            )
+
         type_hint = PLAN_TYPE_HINTS.get(plan_type, "")
         progress_note = ""
         if plan_progress:
@@ -295,11 +313,17 @@ class ReadingPlanAgent:
                 + "\n".join(f"- {s}" for s in plan_progress)
             )
 
+        llm_knowledge_hint = (
+            f"\n\n请基于你对《{book_source}》的知识，推断其大致章节结构并估算阅读时间。"
+            if book_source and not book_in_library else ""
+        )
+
         user_prompt = (
             f"用户阅读计划请求：\n{query}\n\n"
             f"计划类型：{type_hint}\n\n"
             f"{f'指定书目：{book_source}' if book_source else ''}\n\n"
-            f"可供参考的书库信息：\n{context_str}{progress_note}\n\n"
+            f"可供参考的书库信息：\n{context_str}{progress_note}"
+            f"{llm_knowledge_hint}\n\n"
             "请根据以上信息，制定一份切实可行的 Markdown 格式阅读计划。\n"
             "计划要包含：阅读目标、书单/章节安排、每日或每周时间表、阅读建议。\n"
             "时间估算应合理（中文约 300 字/分钟，英文约 200 词/分钟），不要过于乐观。"
@@ -309,24 +333,16 @@ class ReadingPlanAgent:
         if memory_context:
             system += "\n\n【用户历史阅读记录（仅供参考）】\n" + memory_context
 
-        history = self._build_messages_context(plan_messages)
+        history = build_messages_context(plan_messages)
         msg = self.llm.invoke(
             history + [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ]
         )
-        return getattr(msg, "content", str(msg))
+        answer = getattr(msg, "content", str(msg))
+        return answer + not_in_library_note if not_in_library_note else answer
 
-    @staticmethod
-    def _build_messages_context(plan_messages: list[AnyMessage] | None) -> list[dict]:
-        if not plan_messages:
-            return []
-        history = []
-        for m in plan_messages[-4:]:
-            role = "assistant" if getattr(m, "type", "") == "ai" else "user"
-            history.append({"role": role, "content": getattr(m, "content", "")})
-        return history
 
 
 def plan_node(
@@ -374,13 +390,12 @@ def plan_node(
     # 检测新完成章节（当 is_progress_update 模式下，提取 query 中的章节名）
     newly_completed: list[str] = []
     # 若用户输入包含"读完了/已读"，从 query 中提取章节名
-    import re
     match = re.search(r"[《【]?(.+?)[》】]?\s*(?:我)?(?:读完了|已读|看完了|完成了)", query)
     if match:
         newly_completed = [match.group(1).strip()]
 
     existing_ctx = state.get("compound_context") or ""
-    new_ctx = (existing_ctx + f"\n\n[计划结果]\n{content[:500]}").strip()
+    new_ctx = (existing_ctx + f"\n\n[计划结果]\n{content[:1500]}").strip()
 
     # 提取涉及书名
     book_titles: list[str] = []

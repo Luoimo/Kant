@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 import sys
@@ -76,7 +77,7 @@ class DeepReadAgent:
         if config is None:
             config = DeepReadConfig(k=k)
         else:
-            config.k = k
+            config = dataclasses.replace(config, k=k)
         self.config = config
 
         self._collection_name = collection_name or store.collection_name
@@ -254,7 +255,7 @@ def deepread_node(state: dict[str, Any], *, agent: DeepReadAgent) -> dict[str, A
     result = agent.run(query=query, book_source=book_source, memory_context=memory_context)
     content = result.answer
     existing_ctx = state.get("compound_context") or ""
-    new_ctx = (existing_ctx + f"\n\n[精读结果]\n{content[:500]}").strip()
+    new_ctx = (existing_ctx + f"\n\n[精读结果]\n{content[:1500]}").strip()
     return {
         "answer": content,
         "citations": result.citations,

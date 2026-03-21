@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from dotenv import load_dotenv
-
 import logging
 
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 USER_MEMORY_EXTRACTION_PROMPT = f"""You are a Personal Information Organizer, specialized in accurately storing facts, user memories, and preferences. 
 Your primary role is to extract relevant pieces of information from conversations and organize them into distinct, manageable facts. 

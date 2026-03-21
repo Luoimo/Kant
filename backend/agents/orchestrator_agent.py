@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict, Annotated
 import sys
@@ -84,7 +85,6 @@ class GraphState(TypedDict, total=False):
 
     notes_query: str
     notes_book_source: str | None
-    notes_raw_text: str | None
 
     plan_query: str
     plan_book_source: str | None
@@ -254,8 +254,9 @@ def supervisor_node(state: GraphState) -> dict:
             user_input = getattr(m, "content", "") or user_input
             break
 
-    # 1) 安全检查（只做一次）
-    if "safety_ok" not in state:
+    # 1) 安全检查：每轮新请求均重新检查（safety_ok=None 表示本轮尚未检查）
+    #    同一轮内 supervisor 被多次调用时（agent 跑完回来），safety_ok 已是 True/False，跳过
+    if state.get("safety_ok") is None:
         safety_result: InputSafetyResult = run_input_safety_check(user_input)
         patch["safety_ok"] = safety_result.allowed
         patch["safety_reason"] = safety_result.reason
@@ -302,8 +303,10 @@ def supervisor_node(state: GraphState) -> dict:
                 file=sys.stdout,
             )
 
-    # 3) agent 已产出 answer → finalize
-    if state.get("answer"):
+    # 3) agent 已产出 answer 且没有剩余待执行的 agent → finalize
+    #    注意：必须先检查 pending_agents，否则复合流水线第一个 agent 跑完后就会
+    #    提前结束，后续 agent 永远不会被调度。
+    if state.get("answer") and not (state.get("pending_agents") or []):
         patch["next"] = "finalize"
         return patch
 
@@ -338,12 +341,19 @@ def supervisor_node(state: GraphState) -> dict:
 
     # 8) 分发到目标 agent
     book_source = patch.get("book_source") or state.get("book_source")
+
+    ctx_so_far = state.get("compound_context") or ""
+
     if target == "notes":
+        if not book_source:
+            book_source = _extract_recommended_book(ctx_so_far)
         patch["notes_messages"] = [task_msg]
         patch["notes_query"] = user_input
         patch["notes_book_source"] = book_source
         patch["next"] = "notes"
     elif target == "plan":
+        if not book_source:
+            book_source = _extract_recommended_book(ctx_so_far)
         patch["plan_messages"] = [task_msg]
         patch["plan_query"] = user_input
         patch["plan_book_source"] = book_source
@@ -358,13 +368,25 @@ def supervisor_node(state: GraphState) -> dict:
         patch["deepread_book_source"] = book_source
         patch["next"] = "deepread"
 
-    # 9) 进度更新 override
-    if intent_result is not None and intent_result.is_progress_update:
+    # 9) 进度更新 override：仅当当前轮没有待执行的复合 agent 时才覆盖路由
+    #    否则会打断正在进行的复合流水线（如 ["deepread","notes","plan"] 的中间环节）
+    if intent_result is not None and intent_result.is_progress_update and not pending:
         patch["plan_messages"] = [task_msg]
         patch["plan_query"] = user_input
         patch["next"] = "plan"
 
     return patch
+
+
+_AGENT_SECTION_RE = r'\[(?:推荐|计划|笔记|精读)结果\]'
+
+
+def _extract_recommended_book(ctx: str) -> str | None:
+    """从 compound_context 中提取前序 recommend 推荐的第一本书名。"""
+    if not ctx or "[推荐结果]" not in ctx:
+        return None
+    m = re.search(r"###\s+《(.+?)》", ctx) or re.search(r"《(.+?)》", ctx)
+    return m.group(1) if m else None
 
 
 def _synthesize_compound_answer(user_input: str, compound_ctx: str, last_answer: str) -> str:
@@ -379,7 +401,7 @@ def _synthesize_compound_answer(user_input: str, compound_ctx: str, last_answer:
     return getattr(msg, "content", str(msg)) or last_answer
 
 
-def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_memory: bool = True):
+def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_memory: bool = True, _return_deps: bool = False):
     """
     构建 supervisor 编排图：
 
@@ -420,8 +442,8 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_m
         patch: dict = {"next": "end"}
         answer = state.get("answer") or ""
         ctx = state.get("compound_context") or ""
-        # 多 agent 运行时（compound_context 含多个 [...] 标记）→ 合成统一回答
-        if ctx and ctx.count("[") > 1:
+        # 多 agent 运行时（compound_context 含多个 agent 输出标记）→ 合成统一回答
+        if ctx and len(re.findall(_AGENT_SECTION_RE, ctx)) > 1:
             answer = _synthesize_compound_answer(
                 state.get("user_input", ""), ctx, answer
             )
@@ -513,10 +535,24 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_m
         checkpointer = SqliteSaver()  # type: ignore[call-arg]
 
     compiled = graph.compile(checkpointer=checkpointer)
+    if _return_deps:
+        return compiled, deps
     return compiled
 
 
 _minimal_app = None
+_minimal_deps: GraphDeps | None = None
+
+
+def invalidate_bm25_caches() -> None:
+    """入库新书后调用，清除 NoteAgent / ReadingPlanAgent 的 BM25 索引缓存。
+    下次查询时会从 ChromaDB 重新拉取全量文档（含新书）构建索引。"""
+    if _minimal_deps is None:
+        return
+    for agent in (_minimal_deps.notes_agent, _minimal_deps.plan_agent):
+        retriever = getattr(agent, "_retriever", None)
+        if retriever is not None:
+            retriever.invalidate_bm25()
 
 
 def run_minimal_graph(
@@ -539,9 +575,10 @@ def run_minimal_graph(
     - selected_text: 用户在 EPUB 阅读器中划选的原文片段，注入为问题上下文。
     - current_chapter: 当前阅读章节，注入为问题上下文。
     """
-    global _minimal_app
+    global _minimal_app, _minimal_deps
     if _minimal_app is None:
-        _minimal_app = build_minimal_supervisor_graph()
+        store = ChromaStore()
+        _minimal_app, _minimal_deps = build_minimal_supervisor_graph(store=store, _return_deps=True)
 
     app = _minimal_app
     init: GraphState = {
@@ -551,5 +588,17 @@ def run_minimal_graph(
         "active_tab": active_tab,        # type: ignore[typeddict-item]
         "selected_text": selected_text,  # type: ignore[typeddict-item]
         "current_chapter": current_chapter,  # type: ignore[typeddict-item]
+        # ── 每轮重置瞬态字段，防止跨轮 checkpoint 污染 ──────────────────
+        # intent/action：强制重新分类，避免旧 action（如 edit）污染新轮意图
+        "intent": None,
+        "action": None,
+        # answer：清空上轮结果，让 supervisor 正确判断当前轮是否已完成
+        "answer": "",
+        # pending_agents：清空上轮复合流水线队列，防止中断后的残余队列
+        "pending_agents": [],
+        # compound_context：每轮独立积累，不携带上轮内容
+        "compound_context": None,
+        # safety_ok：None 表示本轮尚未做安全检查，supervisor 会重新执行
+        "safety_ok": None,  # type: ignore[typeddict-item]
     }
     return app.invoke(init, config={"configurable": {"thread_id": thread_id}})  # type: ignore[return-value]

@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend.agents.orchestrator_agent import run_minimal_graph
+from backend.agents.orchestrator_agent import invalidate_bm25_caches, run_minimal_graph
 from backend.config import get_settings
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.xai.citation import Citation
@@ -87,6 +87,9 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
         result = store.ingest(dest)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"入库失败：{exc}") from exc
+
+    # 入库成功后清除 BM25 缓存，确保下次检索包含新书内容
+    invalidate_bm25_caches()
 
     return IngestResponse(
         source=result.source,

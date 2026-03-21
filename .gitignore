@@ -25,8 +25,8 @@ htmlcov/
 logs/
 *.log
 
-# 本地数据缓存 / 向量库
-data/chroma/
+# 本地数据（书库、向量库、笔记、计划、会话检查点）
+data/
 vector_store/
 *.sqlite
 *.db
