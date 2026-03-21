@@ -27,6 +27,7 @@ from backend.llm.openai_client import get_llm
 from backend.memory.mem0_store import Mem0Store
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.security.input_filter import InputSafetyResult, run_input_safety_check
+from backend.storage import make_note_storage, make_plan_storage
 from backend.storage.note_storage import LocalNoteStorage, NoteStorage
 from backend.storage.plan_storage import LocalPlanStorage, PlanStorage
 
@@ -422,8 +423,8 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_m
         plan_agent=ReadingPlanAgent(store=store),
         recommend_agent=RecommendationAgent(store=store),
         mem0=mem0,
-        note_storage=LocalNoteStorage(Path(settings.note_storage_dir)),
-        plan_storage=LocalPlanStorage(Path(settings.plan_storage_dir)),
+        note_storage=make_note_storage(settings),
+        plan_storage=make_plan_storage(settings),
     )
 
     def _memory_search(state: GraphState) -> dict:
