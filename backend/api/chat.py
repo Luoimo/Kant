@@ -21,6 +21,10 @@ class ChatRequest(BaseModel):
     query: str
     book_source: str | None = None
     thread_id: str = "default"
+    # Reader 模式专用：前端传入当前 tab / 划选原文 / 当前章节
+    active_tab: str | None = None
+    selected_text: str | None = None
+    current_chapter: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -44,7 +48,6 @@ class IngestResponse(BaseModel):
     total_chunks: int
     added: int
     skipped: int
-    catalog_updated: bool
 
 
 @app.post("/books/upload", response_model=IngestResponse)
@@ -91,7 +94,6 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
         total_chunks=result.total_chunks,
         added=result.added,
         skipped=result.skipped,
-        catalog_updated=True,
     )
 
 
@@ -101,6 +103,9 @@ def chat(req: ChatRequest) -> ChatResponse:
         req.query,
         book_source=req.book_source,
         thread_id=req.thread_id,
+        active_tab=req.active_tab,
+        selected_text=req.selected_text,
+        current_chapter=req.current_chapter,
     )
     return ChatResponse(
         answer=state.get("answer", ""),

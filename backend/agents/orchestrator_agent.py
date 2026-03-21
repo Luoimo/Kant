@@ -122,6 +122,12 @@ class GraphState(TypedDict, total=False):
     # ── New: progress tracking ───────────────────────────────────────
     plan_progress: Annotated[list[str], lambda a, b: a + b]
 
+    # ── Reader mode context ──────────────────────────────────────────
+    # 前端传入：当前激活的 tab、用户划选的原文、当前阅读章节
+    active_tab: Literal["deepread", "notes", "plan", "recommend"] | None
+    selected_text: str | None   # 用户在 EPUB 阅读器中划选的原文片段
+    current_chapter: str | None # 当前阅读章节标题，供 deepread 注入上下文
+
 
 # ---------------------------------------------------------------------------
 # 意图识别（结构化输出）
@@ -157,6 +163,24 @@ class IntentSchema(BaseModel):
     is_progress_update: bool = Field(
         default=False, description='True 当用户报告阅读进度（"XX我读完了/已读"）'
     )
+
+
+# Reader 模式短路路由辅助
+_COMPOUND_SIGNALS = {"并且", "同时", "另外还", "还要", "并帮我", "也帮我", "以及", "顺便", "同时帮我"}
+
+
+def _has_compound_signals(text: str) -> bool:
+    """检测用户输入是否含跨 Agent 复合意图信号（如「分析并做笔记」）。"""
+    return any(kw in text for kw in _COMPOUND_SIGNALS)
+
+
+def _infer_action_from_text(text: str) -> str:
+    """从文本启发式推断 action 类型，避免 reader 模式短路时多一次 LLM call。"""
+    if any(kw in text for kw in ("修改", "更新", "调整", "改成", "改为", "把", "重写")):
+        return "edit"
+    if any(kw in text for kw in ("再加", "继续", "补充", "扩展", "追加", "新增")):
+        return "extend"
+    return "new"
 
 
 def _extract_agent_last_turns(state: "GraphState") -> dict[str, str]:
@@ -249,19 +273,34 @@ def supervisor_node(state: GraphState) -> dict:
     # 2) 意图识别（只做一次）
     intent_result: IntentSchema | None = None
     if state.get("intent") is None:
-        agent_last_turns = _extract_agent_last_turns(state)
-        intent_result = classify_intent(user_input, agent_last_turns)
-        patch["intent"] = intent_result.intent
-        patch["action"] = intent_result.action
-        patch["intent_reason"] = intent_result.reason
-        if not state.get("book_source") and intent_result.book_source:
-            patch["book_source"] = intent_result.book_source
-        print(
-            f"[Supervisor] intent={intent_result.intent}, action={intent_result.action}, "
-            f"compound_intents={intent_result.compound_intents}, "
-            f"reason={intent_result.reason}",
-            file=sys.stdout,
-        )
+        active_tab = state.get("active_tab")
+        # Reader 模式短路：active_tab 已明确且无复合意图信号 → 跳过 LLM 分类
+        if active_tab and not _has_compound_signals(user_input):
+            _TAB_INTENT = {"deepread": "deepread", "notes": "notes",
+                           "plan": "plan", "recommend": "recommend"}
+            tab_intent = _TAB_INTENT.get(active_tab, "deepread")
+            patch["intent"] = tab_intent
+            patch["action"] = _infer_action_from_text(user_input)
+            patch["intent_reason"] = f"reader mode: active_tab={active_tab} → direct route"
+            print(
+                f"[Supervisor] short-circuit route: active_tab={active_tab} → intent={tab_intent}",
+                file=sys.stdout,
+            )
+        else:
+            # Library 模式或含复合意图信号 → LLM 意图分类
+            agent_last_turns = _extract_agent_last_turns(state)
+            intent_result = classify_intent(user_input, agent_last_turns)
+            patch["intent"] = intent_result.intent
+            patch["action"] = intent_result.action
+            patch["intent_reason"] = intent_result.reason
+            if not state.get("book_source") and intent_result.book_source:
+                patch["book_source"] = intent_result.book_source
+            print(
+                f"[Supervisor] intent={intent_result.intent}, action={intent_result.action}, "
+                f"compound_intents={intent_result.compound_intents}, "
+                f"reason={intent_result.reason}",
+                file=sys.stdout,
+            )
 
     # 3) agent 已产出 answer → finalize
     if state.get("answer"):
@@ -284,8 +323,14 @@ def supervisor_node(state: GraphState) -> dict:
     else:
         target = effective_intent
 
-    # 7) 构造 task message（注入 compound_context）
+    # 7) 构造 task message（注入 compound_context / selected_text / current_chapter）
     task_content = user_input
+    selected_text = state.get("selected_text") or ""
+    current_chapter = state.get("current_chapter") or ""
+    if selected_text:
+        task_content = f"【用户划选的原文片段】：\n{selected_text}\n\n【用户问题】：\n{task_content}"
+    if current_chapter:
+        task_content += f"\n\n【当前阅读章节】：{current_chapter}"
     ctx = state.get("compound_context")
     if ctx:
         task_content += f"\n\n【前序步骤结果，供参考】：\n{ctx}"
@@ -479,11 +524,20 @@ def run_minimal_graph(
     *,
     book_source: str | None = None,
     thread_id: str = "default",
+    active_tab: str | None = None,
+    selected_text: str | None = None,
+    current_chapter: str | None = None,
 ) -> GraphState:
     """
     支持多轮对话的入口：
     - 相同 thread_id 下，多次调用会共享同一条对话历史（messages）。
     - 不同 thread_id 互相隔离。
+
+    Reader 模式专用参数：
+    - active_tab: 前端当前激活的 tab（deepread/notes/plan/recommend），
+      有值时跳过 LLM 意图分类，直接路由到对应 Agent。
+    - selected_text: 用户在 EPUB 阅读器中划选的原文片段，注入为问题上下文。
+    - current_chapter: 当前阅读章节，注入为问题上下文。
     """
     global _minimal_app
     if _minimal_app is None:
@@ -494,5 +548,8 @@ def run_minimal_graph(
         "messages": [("user", query)],
         "user_input": query,
         "book_source": book_source,
+        "active_tab": active_tab,        # type: ignore[typeddict-item]
+        "selected_text": selected_text,  # type: ignore[typeddict-item]
+        "current_chapter": current_chapter,  # type: ignore[typeddict-item]
     }
     return app.invoke(init, config={"configurable": {"thread_id": thread_id}})  # type: ignore[return-value]
