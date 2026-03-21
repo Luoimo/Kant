@@ -1,0 +1,46 @@
+# Python 编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+.env/
+.env
+.env.*        # 比如 .env.local / .env.dev
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.iml
+
+# 单元测试 / 覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.cache/
+
+# 日志 / 运行时输出
+logs/
+*.log
+
+# 本地数据缓存 / 向量库
+data/chroma/
+vector_store/
+*.sqlite
+*.db
+
+# 临时文件
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# claude
+.claude
+
+# cursor
+.cursor
