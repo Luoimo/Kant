@@ -14,10 +14,12 @@ class TestMarkdownToBlocks:
     def test_heading2(self):
         blocks = _markdown_to_blocks("## Section")
         assert blocks[0]["type"] == "heading_2"
+        assert blocks[0]["heading_2"]["rich_text"][0]["text"]["content"] == "Section"
 
     def test_heading3(self):
         blocks = _markdown_to_blocks("### Sub")
         assert blocks[0]["type"] == "heading_3"
+        assert blocks[0]["heading_3"]["rich_text"][0]["text"]["content"] == "Sub"
 
     def test_bullet_dash(self):
         blocks = _markdown_to_blocks("- item one")
@@ -27,6 +29,7 @@ class TestMarkdownToBlocks:
     def test_bullet_star(self):
         blocks = _markdown_to_blocks("* item two")
         assert blocks[0]["type"] == "bulleted_list_item"
+        assert blocks[0]["bulleted_list_item"]["rich_text"][0]["text"]["content"] == "item two"
 
     def test_paragraph(self):
         blocks = _markdown_to_blocks("plain text here")

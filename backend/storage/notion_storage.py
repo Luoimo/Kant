@@ -1,9 +1,6 @@
 """Notion-backed storage implementations for notes and plans."""
 from __future__ import annotations
 
-import sys
-from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Markdown → Notion blocks (minimal custom converter)
@@ -52,5 +49,3 @@ def _make_raw_code_block(raw_markdown: str) -> dict:
         },
     }
 
-
-__all__ = ["_markdown_to_blocks", "_make_raw_code_block"]
