@@ -54,6 +54,17 @@ class TestLocalNoteStorage:
         with pytest.raises(FileNotFoundError):
             storage.load(str(tmp_path / "nonexistent.md"))
 
+    def test_update_overwrites_content(self, tmp_path):
+        storage = LocalNoteStorage(root=tmp_path)
+        path = storage.save("# Original", "note_001")
+        storage.update(path, "# Updated")
+        assert storage.load(path) == "# Updated"
+
+    def test_save_returns_str_or_none(self, tmp_path):
+        storage = LocalNoteStorage(root=tmp_path)
+        result = storage.save("content", "note_x")
+        assert result is None or isinstance(result, str)
+
 
 class TestLocalPlanStorage:
     def test_save_and_load(self, tmp_path):
@@ -104,3 +115,14 @@ class TestLocalPlanStorage:
         storage = LocalPlanStorage(root=tmp_path)
         with pytest.raises(FileNotFoundError):
             storage.load(str(tmp_path / "nonexistent.md"))
+
+    def test_update_overwrites_content(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        path = storage.save("# Original", "plan_001")
+        storage.update(path, "# Updated")
+        assert storage.load(path) == "# Updated"
+
+    def test_save_returns_str_or_none(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        result = storage.save("content", "plan_x")
+        assert result is None or isinstance(result, str)

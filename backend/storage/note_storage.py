@@ -5,10 +5,11 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class NoteStorage(Protocol):
-    def save(self, content: str, note_id: str) -> str: ...   # returns storage_path
+    def save(self, content: str, note_id: str) -> str | None: ...   # returns storage_path or None
     def load(self, storage_path: str) -> str: ...
     def list(self, prefix: str = "") -> list[str]: ...
     def delete(self, storage_path: str) -> None: ...
+    def update(self, storage_path: str, content: str) -> None: ...
 
 
 class _LocalMarkdownStorage:
@@ -31,6 +32,9 @@ class _LocalMarkdownStorage:
 
     def delete(self, storage_path: str) -> None:
         Path(storage_path).unlink(missing_ok=True)
+
+    def update(self, storage_path: str, content: str) -> None:
+        Path(storage_path).write_text(content, encoding="utf-8")
 
 
 class LocalNoteStorage(_LocalMarkdownStorage):
