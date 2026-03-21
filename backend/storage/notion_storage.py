@@ -137,7 +137,7 @@ class NotionNoteStorage:
 
             return page_id
         except Exception as e:
-            print(f"[NotionNoteStorage] save failed: {e}", file=sys.stdout)
+            print(f"[NotionNoteStorage] save failed: {e}", file=sys.stderr)
             return None
 
     def load(self, storage_path: str) -> str:
@@ -148,6 +148,8 @@ class NotionNoteStorage:
         return _blocks_to_plain_text(blocks)
 
     def update(self, storage_path: str, content: str) -> None:
+        # Non-atomic: deletes all existing blocks then appends new ones.
+        # If the append fails mid-way, the page will be left blank.
         blocks = _fetch_all_blocks(self._client, storage_path)
         for block in blocks:
             self._client.blocks.delete(block_id=block["id"])
@@ -155,15 +157,14 @@ class NotionNoteStorage:
         _append_blocks_in_batches(self._client, storage_path, new_blocks)
 
     def list(self, prefix: str = "") -> list[str]:
-        filter_: dict = {}
+        query_kwargs: dict = {"database_id": self._db_id}
         if prefix:
-            filter_ = {"property": "Title", "title": {"starts_with": prefix}}
-        response = self._client.databases.query(database_id=self._db_id, filter=filter_)
+            query_kwargs["filter"] = {"property": "Title", "title": {"starts_with": prefix}}
+        response = self._client.databases.query(**query_kwargs)
         page_ids = [p["id"] for p in response["results"]]
         while response.get("has_more"):
             response = self._client.databases.query(
-                database_id=self._db_id,
-                filter=filter_,
+                **query_kwargs,
                 start_cursor=response["next_cursor"],
             )
             page_ids.extend(p["id"] for p in response["results"])
@@ -204,7 +205,7 @@ class NotionPlanStorage:
 
             return page_id
         except Exception as e:
-            print(f"[NotionPlanStorage] save failed: {e}", file=sys.stdout)
+            print(f"[NotionPlanStorage] save failed: {e}", file=sys.stderr)
             return None
 
     def load(self, storage_path: str) -> str:
@@ -215,6 +216,8 @@ class NotionPlanStorage:
         return _blocks_to_plain_text(blocks)
 
     def update(self, storage_path: str, content: str) -> None:
+        # Non-atomic: deletes all existing blocks then appends new ones.
+        # If the append fails mid-way, the page will be left blank.
         blocks = _fetch_all_blocks(self._client, storage_path)
         for block in blocks:
             self._client.blocks.delete(block_id=block["id"])
@@ -222,15 +225,14 @@ class NotionPlanStorage:
         _append_blocks_in_batches(self._client, storage_path, new_blocks)
 
     def list(self, prefix: str = "") -> list[str]:
-        filter_: dict = {}
+        query_kwargs: dict = {"database_id": self._db_id}
         if prefix:
-            filter_ = {"property": "Title", "title": {"starts_with": prefix}}
-        response = self._client.databases.query(database_id=self._db_id, filter=filter_)
+            query_kwargs["filter"] = {"property": "Title", "title": {"starts_with": prefix}}
+        response = self._client.databases.query(**query_kwargs)
         page_ids = [p["id"] for p in response["results"]]
         while response.get("has_more"):
             response = self._client.databases.query(
-                database_id=self._db_id,
-                filter=filter_,
+                **query_kwargs,
                 start_cursor=response["next_cursor"],
             )
             page_ids.extend(p["id"] for p in response["results"])
