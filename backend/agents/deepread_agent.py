@@ -246,13 +246,19 @@ class DeepReadAgent:
 
 
 def deepread_node(state: dict[str, Any], *, agent: DeepReadAgent) -> dict[str, Any]:
+    from langchain_core.messages import AIMessage
     query: str = state.get("deepread_query", "") or state.get("user_input", "")
     book_source: str | None = state.get("deepread_book_source") or state.get("book_source")
     memory_context: str = state.get("memory_context", "") or ""
 
     result = agent.run(query=query, book_source=book_source, memory_context=memory_context)
+    content = result.answer
+    existing_ctx = state.get("compound_context") or ""
+    new_ctx = (existing_ctx + f"\n\n[精读结果]\n{content[:500]}").strip()
     return {
-        "answer": result.answer,
+        "answer": content,
         "citations": result.citations,
         "retrieved_docs_count": len(result.retrieved_docs),
+        "deepread_messages": [AIMessage(content=content)],
+        "compound_context": new_ctx,
     }

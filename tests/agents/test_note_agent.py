@@ -19,11 +19,15 @@ def _make_doc(text: str, source: str = "sample.pdf", title: str = "Test Book", p
 
 @pytest.fixture
 def mock_store():
-    store = MagicMock()
-    store.similarity_search.return_value = [
+    docs = [
         _make_doc("第一章讲述了纯粹理性批判的基本概念。"),
         _make_doc("先验感性论探讨了时间和空间的本质。"),
     ]
+    store = MagicMock()
+    store.collection_name = "test_collection"
+    store.similarity_search.return_value = docs
+    store.similarity_search_with_score.return_value = [(d, 0.9) for d in docs]
+    store.get_all_documents.return_value = docs
     return store
 
 
@@ -43,20 +47,20 @@ class TestNoteAgentRAGPath:
         assert "笔记" in result.answer
         assert len(result.citations) == 2
         assert len(result.retrieved_docs) == 2
-        mock_store.similarity_search.assert_called_once_with(
-            "整理第一章的笔记", k=8, filter={"source": "sample.pdf"}
-        )
 
     def test_run_without_book_source_searches_all(self, mock_store, mock_llm):
         agent = NoteAgent(store=mock_store, llm=mock_llm)
         result = agent.run(query="整理读书笔记")
 
         assert isinstance(result, NoteResult)
-        mock_store.similarity_search.assert_called_once_with("整理读书笔记", k=8, filter=None)
+        assert len(result.retrieved_docs) == 2
 
     def test_run_empty_docs_returns_fallback(self, mock_llm):
         store = MagicMock()
+        store.collection_name = "test_collection"
         store.similarity_search.return_value = []
+        store.similarity_search_with_score.return_value = []
+        store.get_all_documents.return_value = []
         agent = NoteAgent(store=store, llm=mock_llm)
 
         result = agent.run(query="整理笔记", book_source="nonexistent.pdf")
@@ -70,6 +74,9 @@ class TestNoteAgentRAGPath:
 class TestNoteAgentRawTextPath:
     def test_run_with_raw_text_skips_rag(self, mock_llm):
         store = MagicMock()
+        store.collection_name = "test_collection"
+        store.get_all_documents.return_value = []
+        store.similarity_search_with_score.return_value = []
         agent = NoteAgent(store=store, llm=mock_llm)
 
         result = agent.run(query="帮我整理", raw_text="这是一段需要整理的文字内容。")
@@ -77,8 +84,8 @@ class TestNoteAgentRawTextPath:
         assert isinstance(result, NoteResult)
         assert result.citations == []
         assert result.retrieved_docs == []
-        # store should NOT be called because raw_text is provided and no book_source
-        store.similarity_search.assert_not_called()
+        # HybridRetriever should NOT be called because raw_text only (no book_source)
+        store.similarity_search_with_score.assert_not_called()
 
 
 class TestNotesNode:

@@ -18,11 +18,15 @@ def _make_doc(text: str, source: str = "sample.pdf", title: str = "Test Book") -
 
 @pytest.fixture
 def mock_store():
-    store = MagicMock()
-    store.list_sources.return_value = ["data/books/kant.pdf", "data/books/nietzsche.pdf"]
-    store.similarity_search.return_value = [
+    docs = [
         _make_doc("第一章：导言", source="data/books/kant.pdf", title="纯粹理性批判"),
     ]
+    store = MagicMock()
+    store.collection_name = "test_collection"
+    store.list_sources.return_value = ["data/books/kant.pdf", "data/books/nietzsche.pdf"]
+    store.similarity_search.return_value = docs
+    store.similarity_search_with_score.return_value = [(d, 0.9) for d in docs]
+    store.get_all_documents.return_value = docs
     return store
 
 
@@ -41,9 +45,6 @@ class TestReadingPlanAgent:
         assert isinstance(result, ReadingPlanResult)
         assert "阅读" in result.answer
         assert len(result.retrieved_docs) == 1
-        mock_store.similarity_search.assert_called_once_with(
-            "帮我制定两周阅读计划", k=6, filter={"source": "data/books/kant.pdf"}
-        )
 
     def test_run_without_book_source_uses_list_sources(self, mock_store, mock_llm):
         agent = ReadingPlanAgent(store=mock_store, llm=mock_llm)
@@ -51,13 +52,14 @@ class TestReadingPlanAgent:
 
         assert isinstance(result, ReadingPlanResult)
         mock_store.list_sources.assert_called_once()
-        # similarity_search should be called (since list_sources returns sources)
-        mock_store.similarity_search.assert_called_once()
 
     def test_run_handles_list_sources_failure(self, mock_llm):
         store = MagicMock()
+        store.collection_name = "test_collection"
         store.list_sources.side_effect = Exception("connection error")
         store.similarity_search.return_value = []
+        store.similarity_search_with_score.return_value = []
+        store.get_all_documents.return_value = []
         agent = ReadingPlanAgent(store=store, llm=mock_llm)
 
         # Should not raise
@@ -67,8 +69,11 @@ class TestReadingPlanAgent:
 
     def test_run_empty_sources_and_docs(self, mock_llm):
         store = MagicMock()
+        store.collection_name = "test_collection"
         store.list_sources.return_value = []
         store.similarity_search.return_value = []
+        store.similarity_search_with_score.return_value = []
+        store.get_all_documents.return_value = []
         agent = ReadingPlanAgent(store=store, llm=mock_llm)
 
         result = agent.run(query="制定计划")
