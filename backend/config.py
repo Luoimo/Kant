@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     mem0_user_id: str = "kant-user"
     mem0_chroma_collection_name: str = ""
 
+    # Note and plan storage
+    note_storage_dir: str = "data/notes"
+    plan_storage_dir: str = "data/plans"
+
 
 def get_settings() -> Settings:
     return Settings()
