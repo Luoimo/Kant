@@ -1,7 +1,37 @@
 import pytest
 from pathlib import Path
 from backend.storage.note_storage import LocalNoteStorage
-from backend.storage.plan_storage import LocalPlanStorage
+from backend.storage.plan_storage import LocalPlanStorage, safe_plan_name
+
+
+class TestSafePlanName:
+    def test_strips_chinese_brackets(self):
+        assert safe_plan_name("《纯粹理性批判》") == "纯粹理性批判"
+
+    def test_strips_angle_brackets(self):
+        assert safe_plan_name("<test>") == "test"
+
+    def test_fallback_for_empty(self):
+        assert safe_plan_name("") == "unknown"
+
+
+class TestLocalPlanStorageFindByBook:
+    def test_find_by_book_returns_path_when_exists(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save("plan content", safe_plan_name("纯粹理性批判"))
+        path = storage.find_by_book("纯粹理性批判")
+        assert path is not None
+        assert path.endswith(".md")
+
+    def test_find_by_book_returns_none_when_missing(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        assert storage.find_by_book("不存在的书") is None
+
+    def test_find_by_book_sanitizes_title(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save("content", safe_plan_name("《纯粹理性批判》"))
+        path = storage.find_by_book("《纯粹理性批判》")
+        assert path is not None
 
 
 class TestLocalNoteStorage:
