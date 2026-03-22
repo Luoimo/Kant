@@ -132,7 +132,7 @@ SUPERVISOR_SYSTEM = """你是智能阅读助手的总协调器，可使用以下
 
 工作原则：
 1. 分析用户请求，选择合适的工具（可依次调用多个）
-2. 修改计划时：直接调用 modify_plan，传入书名和修改要求
+2. 修改计划时：直接调用 modify_plan，只需传入用户的修改要求（书籍已自动关联）
 3. 将所有工具结果整合为一份连贯完整的 Markdown 回答
 4. 如检测到用户报告阅读进度（"XX章节我读完了"），调用 modify_plan 更新计划
 
@@ -285,8 +285,12 @@ def build_minimal_supervisor_graph(
 
         ctx = RequestContext()
 
+        # 解析当前书籍信息（file path → human-readable title）
+        book_source = state.get("book_source")
+        book_title = _resolve_book_title(book_source, store)
+
         # 构建 supervisor ReAct agent（每次请求重建以捕获最新上下文）
-        tools = _build_supervisor_tools(deps, ctx, memory_context, thread_id)
+        tools = _build_supervisor_tools(deps, ctx, memory_context, thread_id, book_source, book_title)
         supervisor_agent = create_react_agent(llm, tools, prompt=SUPERVISOR_SYSTEM)
 
         # 构造用户消息（注入 reader 模式上下文）
