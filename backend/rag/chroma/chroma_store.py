@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import uuid as _uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -208,6 +209,7 @@ class IngestResult:
     added: int              # 本次实际写入数量
     skipped: int            # 因去重跳过的数量
     collection_name: str
+    book_id: str = ""       # uuid5(NAMESPACE_URL, source) — 稳定唯一书籍标识
 
     def __str__(self) -> str:
         return (
@@ -312,7 +314,8 @@ class ChromaStore:
         logger.info("  → collection：%s", collection_name)
 
         db = self._resolve_db(collection_name)
-        result = self._ingest_chunks_to_db(chunks, db, source=str(path))
+        book_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, str(path)))
+        result = self._ingest_chunks_to_db(chunks, db, source=str(path), book_id=book_id)
         logger.info("  ✓ 入库完成：%s", result)
 
         return result
@@ -329,7 +332,8 @@ class ChromaStore:
         """
         db = self._resolve_db(collection_name)
         source = chunks[0].metadata.source if chunks else ""
-        return self._ingest_chunks_to_db(chunks, db, source=source)
+        book_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, source)) if source else ""
+        return self._ingest_chunks_to_db(chunks, db, source=source, book_id=book_id)
 
     # ------------------------------------------------------------------
     # 公开：删除接口
@@ -468,10 +472,22 @@ class ChromaStore:
                     author = metas[0].get("author", "")
                     if title and title not in seen:
                         seen.add(title)
-                        books.append({"book_title": title, "author": author, "source": src})
+                        books.append({
+                            "book_title": title,
+                            "author": author,
+                            "source": src,
+                            "book_id": metas[0].get("book_id", ""),
+                        })
             except Exception as exc:
                 logger.warning("list_book_titles：跳过 source=%s，原因：%s", src, exc)
         return books
+
+    def resolve_book_by_id(self, book_id: str) -> dict | None:
+        """Return {book_id, source, book_title, author} for a given book_id, or None."""
+        for entry in self.list_book_titles():
+            if entry.get("book_id") == book_id:
+                return entry
+        return None
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -506,6 +522,7 @@ class ChromaStore:
         chunks: list[TextChunk],
         db: Chroma,
         source: str,
+        book_id: str = "",
     ) -> IngestResult:
         """
         将 TextChunk 列表写入 Chroma，支持跳过已有 collection 和分批 Embedding。
@@ -536,13 +553,14 @@ class ChromaStore:
                 added=0,
                 skipped=total,
                 collection_name=db._collection.name,
+                book_id=book_id,
             )
 
         # 分批写入
         added = 0
         for i in range(0, len(chunks), cfg.embed_batch_size):
             batch = chunks[i: i + cfg.embed_batch_size]
-            documents = [self._chunk_to_document(c) for c in batch]
+            documents = [self._chunk_to_document(c, book_id) for c in batch]
             ids = [c.chunk_id for c in batch]
             db.add_documents(documents=documents, ids=ids)
             added += len(batch)
@@ -554,10 +572,11 @@ class ChromaStore:
             added=added,
             skipped=skipped,
             collection_name=db._collection.name,
+            book_id=book_id,
         )
 
     @staticmethod
-    def _chunk_to_document(chunk: TextChunk) -> Document:
+    def _chunk_to_document(chunk: TextChunk, book_id: str = "") -> Document:
         """
         将 :class:`TextChunk` 转换为 LangChain :class:`Document`。
         Chroma 元数据值必须为 str/int/float/bool，page_numbers 序列化为逗号分隔字符串。
@@ -569,6 +588,7 @@ class ChromaStore:
                 "chunk_id": chunk.chunk_id,
                 "char_count": chunk.char_count,
                 "source": meta.source,
+                "book_id": book_id,
                 "section_indices": _PAGE_SEP.join(str(i) for i in meta.section_indices),
                 "chunk_index": meta.chunk_index,
                 "book_title": meta.book_title,
