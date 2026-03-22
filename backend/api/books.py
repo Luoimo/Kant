@@ -15,12 +15,14 @@ router = APIRouter(prefix="/books", tags=["books"])
 
 
 class BookEntry(BaseModel):
-    source: str       # ChromaDB source 路径，作为唯一标识
+    id: str           # book_id (UUID)
+    source: str       # ChromaDB source 路径（调试用）
     book_title: str
     author: str
 
 
 class IngestResponse(BaseModel):
+    id: str           # book_id (UUID)
     source: str
     collection_name: str
     total_chunks: int
@@ -34,6 +36,7 @@ def list_books() -> list[BookEntry]:
     store = ChromaStore()
     return [
         BookEntry(
+            id=entry.get("book_id", ""),
             source=entry.get("source", ""),
             book_title=entry.get("book_title", ""),
             author=entry.get("author", ""),
@@ -73,6 +76,7 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
     invalidate_bm25_caches()
 
     return IngestResponse(
+        id=result.book_id,
         source=result.source,
         collection_name=result.collection_name,
         total_chunks=result.total_chunks,
