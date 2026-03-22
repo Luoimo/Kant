@@ -1,167 +1,113 @@
-"""Tests for ReadingPlanAgent — no real API calls, no real ChromaStore."""
+"""Tests for ReadingPlanAgent — edit/extend only, no new-plan creation."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage
 
-from backend.agents.reading_plan_agent import ReadingPlanAgent, ReadingPlanResult, plan_node
+from backend.agents.reading_plan_agent import ReadingPlanAgent, ReadingPlanResult
 
-
-def _make_doc(text: str, source: str = "sample.pdf", title: str = "Test Book") -> Document:
-    return Document(
-        page_content=text,
-        metadata={"source": source, "book_title": title, "section_indices": "1"},
-    )
+_FAKE_ANSWER = "## 更新后的计划\n\n每天读两章"
+_EXISTING_PLAN = "# 《康德》阅读计划\n\n## 章节进度\n\n- [ ] 第1章（约30分钟）"
 
 
-@pytest.fixture
-def mock_store():
-    docs = [
-        _make_doc("第一章：导言", source="data/books/kant.pdf", title="纯粹理性批判"),
-    ]
+def _make_store() -> MagicMock:
     store = MagicMock()
-    store.collection_name = "test_collection"
-    store.list_sources.return_value = ["data/books/kant.pdf", "data/books/nietzsche.pdf"]
-    store.similarity_search.return_value = docs
-    store.similarity_search_with_score.return_value = [(d, 0.9) for d in docs]
-    store.get_all_documents.return_value = docs
+    store.collection_name = "test_col"
+    store.list_sources.return_value = ["kant.epub"]
+    store.get_all_documents.return_value = [
+        Document(page_content="内容" * 100, metadata={"chapter_title": "第1章", "source": "kant.epub"})
+    ]
     return store
 
 
-@pytest.fixture
-def mock_llm():
+def _make_llm() -> MagicMock:
     llm = MagicMock()
-    llm.invoke.return_value = MagicMock(content="## 阅读目标\n\n- 完成两周阅读")
+    llm.invoke.return_value = MagicMock(content=_FAKE_ANSWER)
+    llm.bind_tools.return_value = llm
     return llm
 
 
-class TestReadingPlanAgent:
-    def test_run_with_book_source(self, mock_store, mock_llm):
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm)
-        result = agent.run(query="帮我制定两周阅读计划", book_source="data/books/kant.pdf")
+def _make_react_graph(answer: str = _FAKE_ANSWER) -> MagicMock:
+    graph = MagicMock()
+    graph.invoke.return_value = {"messages": [AIMessage(content=answer)]}
+    return graph
+
+
+class TestReadingPlanAgentEdit:
+    def test_run_edit_returns_result(self, tmp_path):
+        plan_file = tmp_path / "康德.md"
+        plan_file.write_text(_EXISTING_PLAN, encoding="utf-8")
+
+        with patch("langgraph.prebuilt.create_react_agent", return_value=_make_react_graph()):
+            agent = ReadingPlanAgent(
+                store=_make_store(),
+                llm=_make_llm(),
+                plan_storage_dir=tmp_path,
+            )
+            result = agent.run(
+                query="把计划改成每天两章",
+                book_title="康德",
+                action="edit",
+            )
 
         assert isinstance(result, ReadingPlanResult)
-        assert "阅读" in result.answer
-        assert len(result.retrieved_docs) == 1
+        assert result.answer == _FAKE_ANSWER
 
-    def test_run_without_book_source_uses_list_sources(self, mock_store, mock_llm):
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm)
-        result = agent.run(query="给我一个阅读计划")
+    def test_run_extend_returns_result(self, tmp_path):
+        plan_file = tmp_path / "康德.md"
+        plan_file.write_text(_EXISTING_PLAN, encoding="utf-8")
 
-        assert isinstance(result, ReadingPlanResult)
-        mock_store.list_sources.assert_called_once()
+        with patch("langgraph.prebuilt.create_react_agent", return_value=_make_react_graph()):
+            agent = ReadingPlanAgent(
+                store=_make_store(),
+                llm=_make_llm(),
+                plan_storage_dir=tmp_path,
+            )
+            result = agent.run(
+                query="增加第二部分的内容",
+                book_title="康德",
+                action="extend",
+            )
 
-    def test_run_handles_list_sources_failure(self, mock_llm):
-        store = MagicMock()
-        store.collection_name = "test_collection"
-        store.list_sources.side_effect = Exception("connection error")
-        store.similarity_search.return_value = []
-        store.similarity_search_with_score.return_value = []
-        store.get_all_documents.return_value = []
-        agent = ReadingPlanAgent(store=store, llm=mock_llm)
-
-        # Should not raise
-        result = agent.run(query="制定阅读计划")
-
-        assert isinstance(result, ReadingPlanResult)
-
-    def test_run_empty_sources_and_docs(self, mock_llm):
-        store = MagicMock()
-        store.collection_name = "test_collection"
-        store.list_sources.return_value = []
-        store.similarity_search.return_value = []
-        store.similarity_search_with_score.return_value = []
-        store.get_all_documents.return_value = []
-        agent = ReadingPlanAgent(store=store, llm=mock_llm)
-
-        result = agent.run(query="制定计划")
-
-        assert isinstance(result, ReadingPlanResult)
-        assert result.citations == []
-
-
-class TestReadingPlanAgentLoadDegradation:
-    def test_load_failure_degrades_to_new(self, mock_store, mock_llm):
-        failing_storage = MagicMock()
-        failing_storage.load.side_effect = ConnectionError("Notion unavailable")
-
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=failing_storage)
-        result = agent.run(
-            query="修改计划",
-            action="edit",
-            storage_path="some-page-id",
-        )
         assert isinstance(result, ReadingPlanResult)
         assert result.answer
 
+    def test_run_saves_updated_plan(self, tmp_path):
+        plan_file = tmp_path / "康德.md"
+        plan_file.write_text(_EXISTING_PLAN, encoding="utf-8")
 
-class TestPlanNode:
-    def test_plan_node_reads_state_fields(self, mock_store, mock_llm):
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm)
-        state = {
-            "plan_query": "制定阅读计划",
-            "plan_book_source": "data/books/kant.pdf",
-        }
+        with patch("langgraph.prebuilt.create_react_agent", return_value=_make_react_graph()):
+            agent = ReadingPlanAgent(
+                store=_make_store(),
+                llm=_make_llm(),
+                plan_storage_dir=tmp_path,
+            )
+            agent.run(query="修改计划", book_title="康德", action="edit")
 
-        patch_dict = plan_node(state, agent=agent)
+        updated = plan_file.read_text(encoding="utf-8")
+        assert "更新后的计划" in updated
 
-        assert "answer" in patch_dict
-        assert "citations" in patch_dict
-        assert "retrieved_docs_count" in patch_dict
+    def test_run_no_existing_plan_still_returns_result(self, tmp_path):
+        """If no plan exists yet, agent gracefully continues without load_existing_plan."""
+        with patch("langgraph.prebuilt.create_react_agent", return_value=_make_react_graph()):
+            agent = ReadingPlanAgent(
+                store=_make_store(),
+                llm=_make_llm(),
+                plan_storage_dir=tmp_path,
+            )
+            result = agent.run(
+                query="修改计划",
+                book_title="不存在的书",
+                action="edit",
+            )
+        assert isinstance(result, ReadingPlanResult)
 
-    def test_plan_node_falls_back_to_user_input(self, mock_store, mock_llm):
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm)
-        state = {"user_input": "帮我制定计划"}
-
-        patch_dict = plan_node(state, agent=agent)
-
-        assert "answer" in patch_dict
-
-
-class TestPlanNodeStorage:
-    def _make_state(self, action="new", storage_path=""):
-        return {
-            "user_input": "制定计划",
-            "action": action,
-            "plan_last_output": {"storage_path": storage_path},
-            "plan_messages": [],
-            "memory_context": "",
-        }
-
-    def test_new_action_calls_save(self, mock_store, mock_llm):
-        storage = MagicMock()
-        storage.save.return_value = "local/plan_001.md"
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
-        state = self._make_state(action="new")
-        plan_node(state, agent=agent)
-        storage.save.assert_called_once()
-        storage.update.assert_not_called()
-
-    def test_edit_action_calls_update_when_storage_path_exists(self, mock_store, mock_llm):
-        storage = MagicMock()
-        storage.load.return_value = "# Old Plan"
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
-        state = self._make_state(action="edit", storage_path="existing-page-id")
-        plan_node(state, agent=agent)
-        storage.update.assert_called_once_with("existing-page-id", mock_llm.invoke.return_value.content)
-        storage.save.assert_not_called()
-
-    def test_extend_action_calls_update_when_storage_path_exists(self, mock_store, mock_llm):
-        storage = MagicMock()
-        storage.load.return_value = "## Old Plan"
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
-        state = self._make_state(action="extend", storage_path="existing-page-id")
-        plan_node(state, agent=agent)
-        storage.update.assert_called_once_with("existing-page-id", mock_llm.invoke.return_value.content)
-        storage.save.assert_not_called()
-
-    def test_save_failure_does_not_raise(self, mock_store, mock_llm):
-        storage = MagicMock()
-        storage.save.side_effect = ConnectionError("Notion down")
-        agent = ReadingPlanAgent(store=mock_store, llm=mock_llm, plan_storage=storage)
-        state = self._make_state(action="new")
-        result = plan_node(state, agent=agent)
-        assert result["plan_last_output"]["storage_path"] == ""
-        assert result["answer"]  # answer is still returned
+    def test_plan_node_not_exported(self):
+        """plan_node has been removed — only ReadingPlanAgent and ReadingPlanResult exported."""
+        import backend.agents.reading_plan_agent as m
+        assert not hasattr(m, "plan_node")
