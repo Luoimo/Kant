@@ -34,27 +34,6 @@ from backend.storage.note_vector_store import make_note_vector_store
 # 书名解析工具函数
 # ---------------------------------------------------------------------------
 
-def _resolve_book_title(book_source: str | None, store) -> str:
-    """从 ChromaDB 元数据中查找当前书的人类可读书名。未找到返回 ''。
-
-    Performance note: list_book_titles() fetches all metadata from ChromaDB on each
-    call. For a single-user small-library deployment this is acceptable.
-    If the library grows beyond ~50 books, consider caching the title map at graph
-    construction time and invalidating on POST /books/upload.
-
-    Edge case: returns '' when book_source is set but the book has no 'book_title'
-    metadata. In this case modify_plan will return an early error string.
-    """
-    if not book_source:
-        return ""
-    try:
-        for entry in store.list_book_titles():
-            if entry.get("source") == book_source:
-                return entry.get("book_title", "")
-    except Exception:
-        pass
-    return ""
-
 
 def _title_from_docs(docs) -> str:
     """从检索结果元数据中提取书名（deepread_book 自动笔记 hook 的 fallback）。"""
@@ -100,7 +79,7 @@ class GraphState(TypedDict, total=False):
 
     # 输入字段
     user_input: str
-    book_source: str | None
+    book_id: str | None
 
     # 安全检查
     safety_ok: bool
@@ -285,9 +264,11 @@ def build_minimal_supervisor_graph(
 
         ctx = RequestContext()
 
-        # 解析当前书籍信息（file path → human-readable title）
-        book_source = state.get("book_source")
-        book_title = _resolve_book_title(book_source, store)
+        # 解析当前书籍信息（book_id → source + book_title）
+        book_id = state.get("book_id")
+        book_info = store.resolve_book_by_id(book_id) if book_id else None
+        book_source = book_info["source"] if book_info else None
+        book_title = book_info.get("book_title", "") if book_info else ""
 
         # 构建 supervisor ReAct agent（每次请求重建以捕获最新上下文）
         tools = _build_supervisor_tools(deps, ctx, memory_context, thread_id, book_source, book_title)
@@ -386,7 +367,7 @@ def invalidate_bm25_caches() -> None:
 def run_minimal_graph(
     query: str,
     *,
-    book_source: str | None = None,
+    book_id: str | None = None,
     thread_id: str = "default",
     selected_text: str | None = None,
     current_chapter: str | None = None,
@@ -405,7 +386,7 @@ def run_minimal_graph(
     init: GraphState = {
         "messages": [("user", query)],
         "user_input": query,
-        "book_source": book_source,
+        "book_id": book_id,
         "selected_text": selected_text,    # type: ignore[typeddict-item]
         "current_chapter": current_chapter,# type: ignore[typeddict-item]
         # 每轮重置安全状态（强制重新检查）

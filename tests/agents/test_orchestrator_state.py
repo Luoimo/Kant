@@ -4,7 +4,6 @@ from backend.agents.orchestrator_agent import (
     GraphState,
     RequestContext,
     _build_supervisor_tools,
-    _resolve_book_title,
     _title_from_docs,
 )
 from langchain_core.messages import AIMessage
@@ -55,37 +54,10 @@ def test_request_context_mutation():
     assert ctx.intent == "deepread"
 
 
-# ---------------------------------------------------------------------------
-# _resolve_book_title
-# ---------------------------------------------------------------------------
-
-def test_resolve_book_title_returns_matching_title():
-    store = MagicMock()
-    store.list_book_titles.return_value = [
-        {"source": "data/books/kant.epub", "book_title": "纯粹理性批判"},
-        {"source": "data/books/hegel.epub", "book_title": "精神现象学"},
-    ]
-    assert _resolve_book_title("data/books/kant.epub", store) == "纯粹理性批判"
-
-
-def test_resolve_book_title_returns_empty_when_not_found():
-    store = MagicMock()
-    store.list_book_titles.return_value = [
-        {"source": "data/books/hegel.epub", "book_title": "精神现象学"},
-    ]
-    assert _resolve_book_title("data/books/kant.epub", store) == ""
-
-
-def test_resolve_book_title_returns_empty_when_book_source_is_none():
-    store = MagicMock()
-    assert _resolve_book_title(None, store) == ""
-    store.list_book_titles.assert_not_called()
-
-
-def test_resolve_book_title_returns_empty_on_store_exception():
-    store = MagicMock()
-    store.list_book_titles.side_effect = Exception("chroma down")
-    assert _resolve_book_title("data/books/kant.epub", store) == ""
+def test_graphstate_has_book_id_not_book_source():
+    annotations = GraphState.__annotations__
+    assert "book_id" in annotations
+    assert "book_source" not in annotations
 
 
 # ---------------------------------------------------------------------------
