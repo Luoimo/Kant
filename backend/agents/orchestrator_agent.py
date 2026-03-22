@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict, Annotated
 import sys
 
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
+from langchain_core.tools import tool
 try:
     from langgraph.checkpoint.sqlite import SqliteSaver
     import sqlite3 as _sqlite3
@@ -14,418 +14,247 @@ except ImportError:
     from langgraph.checkpoint.memory import MemorySaver as SqliteSaver  # type: ignore[assignment]
     _SQLITE_AVAILABLE = False
 from langgraph.graph import END, START, StateGraph, add_messages
-from pydantic import BaseModel, Field
+from langgraph.prebuilt import create_react_agent
 
 from pathlib import Path
 
 from backend.config import get_settings
-from backend.agents.deepread_agent import DeepReadAgent, deepread_node
-from backend.agents.note_agent import NoteAgent, notes_node
-from backend.agents.reading_plan_agent import ReadingPlanAgent, plan_node
-from backend.agents.recommendation_agent import RecommendationAgent, recommend_node
+from backend.agents.deepread_agent import DeepReadAgent
+from backend.agents.note_agent import NoteAgent
+from backend.agents.plan_editor import PlanEditor
+from backend.agents.recommendation_agent import RecommendationAgent
 from backend.llm.openai_client import get_llm
 from backend.memory.mem0_store import Mem0Store
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.security.input_filter import InputSafetyResult, run_input_safety_check
-from backend.storage import make_note_storage, make_plan_storage
-from backend.storage.note_storage import LocalNoteStorage, NoteStorage
-from backend.storage.plan_storage import LocalPlanStorage, PlanStorage
+from backend.storage.note_vector_store import make_note_vector_store
 
 
-# 依赖注入：不可序列化依赖（子 agent 等）通过 GraphDeps 注入节点，不写入 state，避免 checkpoint 序列化报错。
+# ---------------------------------------------------------------------------
+# 书名解析工具函数
+# ---------------------------------------------------------------------------
 
+def _resolve_book_title(book_source: str | None, store) -> str:
+    """从 ChromaDB 元数据中查找当前书的人类可读书名。未找到返回 ''。
+
+    Performance note: list_book_titles() fetches all metadata from ChromaDB on each
+    call. For a single-user small-library deployment this is acceptable.
+    If the library grows beyond ~50 books, consider caching the title map at graph
+    construction time and invalidating on POST /books/upload.
+
+    Edge case: returns '' when book_source is set but the book has no 'book_title'
+    metadata. In this case modify_plan will return an early error string.
+    """
+    if not book_source:
+        return ""
+    try:
+        for entry in store.list_book_titles():
+            if entry.get("source") == book_source:
+                return entry.get("book_title", "")
+    except Exception:
+        pass
+    return ""
+
+
+def _title_from_docs(docs) -> str:
+    """从检索结果元数据中提取书名（deepread_book 自动笔记 hook 的 fallback）。"""
+    for doc in docs:
+        title = (doc.metadata or {}).get("book_title", "")
+        if title:
+            return title
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# 依赖容器（不可序列化，通过闭包注入节点）
+# ---------------------------------------------------------------------------
 
 @dataclass
 class GraphDeps:
-    """图内依赖容器，仅通过闭包传入节点，不写入 state。"""
     deepread_agent: DeepReadAgent
     notes_agent: NoteAgent
-    plan_agent: ReadingPlanAgent
+    plan_agent: PlanEditor
     recommend_agent: RecommendationAgent
     mem0: Mem0Store | None = None
-    note_storage: NoteStorage = field(default_factory=lambda: LocalNoteStorage(Path("data/notes")))
-    plan_storage: PlanStorage = field(default_factory=lambda: LocalPlanStorage(Path("data/plans")))
 
 
-class NoteOutputMeta(TypedDict, total=False):
-    note_id: str
-    book_title: str
-    topics: list
-    storage_path: str
-    created_at: str  # ISO 8601
+# ---------------------------------------------------------------------------
+# 请求级上下文（工具调用的副作用收集器）
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RequestContext:
+    """每次 run() 调用重置，工具通过此对象传递 citations 等副作用。"""
+    citations: list = field(default_factory=list)
+    retrieved_docs_count: int = 0
+    intent: str = "deepread"
 
 
-class PlanOutputMeta(TypedDict, total=False):
-    plan_id: str
-    book_titles: list
-    plan_type: str
-    storage_path: str
-    created_at: str  # ISO 8601
-    progress_summary: str
-
+# ---------------------------------------------------------------------------
+# GraphState
+# ---------------------------------------------------------------------------
 
 class GraphState(TypedDict, total=False):
-    # 对话历史（多轮）：LangGraph 推荐的 messages 模式
+    # 对话历史
     messages: Annotated[list[AnyMessage], add_messages]
 
-    # 输入辅助字段（兼容旧调用方式）
+    # 输入字段
     user_input: str
     book_source: str | None
 
-    # 识别出的意图
-    intent: Literal["recommend", "deepread", "notes", "plan"] | None
-    intent_reason: str
-
-    # 安全检查结果
+    # 安全检查
     safety_ok: bool
     safety_reason: str
 
-    # 总控下发给子 Agent 的任务（解耦：子 Agent 只读这些，不直接读 messages）
-    deepread_query: str
-    deepread_book_source: str | None
-
-    notes_query: str
-    notes_book_source: str | None
-
-    plan_query: str
-    plan_book_source: str | None
-
-    recommend_query: str
-
-    # 记忆上下文（由 memory_search 节点写入，子 Agent 只读）
+    # 记忆上下文
     memory_context: str
 
     # 输出
     answer: str
     citations: list[Any]
     retrieved_docs_count: int
+    intent: str
 
-    # Supervisor 路由字段
-    next: Literal["deepread", "notes", "plan", "recommend", "finalize", "end"]
-
-    # ── New: per-agent message lists ────────────────────────────────
-    deepread_messages:   Annotated[list[AnyMessage], add_messages]
-    notes_messages:      Annotated[list[AnyMessage], add_messages]
-    plan_messages:       Annotated[list[AnyMessage], add_messages]
-    recommend_messages:  Annotated[list[AnyMessage], add_messages]
-
-    # ── New: multi-agent pipeline ────────────────────────────────────
-    pending_agents:   list[str]
-    compound_context: str | None
-
-    # ── New: action type ─────────────────────────────────────────────
-    action: Literal["new", "edit", "extend"] | None
-
-    # ── New: structured output metadata pointers ─────────────────────
-    notes_last_output: NoteOutputMeta | None
-    plan_last_output:  PlanOutputMeta | None
-
-    # ── New: progress tracking ───────────────────────────────────────
-    plan_progress: Annotated[list[str], lambda a, b: a + b]
-
-    # ── Reader mode context ──────────────────────────────────────────
-    # 前端传入：当前激活的 tab、用户划选的原文、当前阅读章节
-    active_tab: Literal["deepread", "notes", "plan", "recommend"] | None
-    selected_text: str | None   # 用户在 EPUB 阅读器中划选的原文片段
-    current_chapter: str | None # 当前阅读章节标题，供 deepread 注入上下文
+    # Reader 模式
+    selected_text: str | None
+    current_chapter: str | None
 
 
 # ---------------------------------------------------------------------------
-# 意图识别（结构化输出）
+# Supervisor 系统提示
 # ---------------------------------------------------------------------------
 
+SUPERVISOR_SYSTEM = """你是智能阅读助手的总协调器，可使用以下工具：
 
-class IntentSchema(BaseModel):
-    intent: Literal["recommend", "deepread", "notes", "plan"] = Field(
-        description="当前用户请求的主要意图类型。"
-    )
-    action: Literal["new", "edit", "extend"] = Field(
-        default="new",
-        description="操作类型：new=全新任务, edit=修改已有输出, extend=扩展已有输出"
-    )
-    reason: str = Field(description="一句话解释为什么这么判断这个意图。")
-    book_source: str | None = Field(
-        default=None,
-        description="如果用户显式提到了某本书/文件路径，这里给出它；否则为 None。",
-    )
-    compound_intents: list[str] = Field(
-        default_factory=list,
-        description="复合请求时按顺序排列的所有 agent，如 ['recommend','plan']；单步请求留空。"
-    )
-    notes_format: Literal["structured", "summary", "qa", "timeline"] | None = Field(
-        default=None, description="笔记格式（仅 notes 意图时有效）"
-    )
-    recommend_type: Literal["discover", "similar", "next", "theme"] | None = Field(
-        default=None, description="推荐子类型（仅 recommend 意图时有效）"
-    )
-    plan_type: Literal["single_deep", "multi_theme", "research"] | None = Field(
-        default=None, description="计划子类型（仅 plan 意图时有效）"
-    )
-    is_progress_update: bool = Field(
-        default=False, description='True 当用户报告阅读进度（"XX我读完了/已读"）'
-    )
+- deepread_book: 对书库中的书籍进行深度精读、解析和问答（每次调用后系统会自动记录笔记）
+- modify_plan: 修改或扩展用户已有的阅读计划（在 Reader Mode 中打开书后计划会自动生成）
+- recommend_books: 从整个出版世界中推荐值得精读的书籍
 
+工作原则：
+1. 分析用户请求，选择合适的工具（可依次调用多个）
+2. 修改计划时：直接调用 modify_plan，传入书名和修改要求
+3. 将所有工具结果整合为一份连贯完整的 Markdown 回答
+4. 如检测到用户报告阅读进度（"XX章节我读完了"），调用 modify_plan 更新计划
 
-# Reader 模式短路路由辅助
-_COMPOUND_SIGNALS = {"并且", "同时", "另外还", "还要", "并帮我", "也帮我", "以及", "顺便", "同时帮我"}
+重要规则：
+- 只使用工具返回的内容作答，不编造不存在的事实
+"""
 
+# ---------------------------------------------------------------------------
+# 工具构建（每次请求重建，捕获请求级上下文）
+# ---------------------------------------------------------------------------
 
-def _has_compound_signals(text: str) -> bool:
-    """检测用户输入是否含跨 Agent 复合意图信号（如「分析并做笔记」）。"""
-    return any(kw in text for kw in _COMPOUND_SIGNALS)
+def _build_supervisor_tools(
+    deps: GraphDeps,
+    ctx: RequestContext,
+    memory_context: str,
+    thread_id: str,
+):
+    """构建 3 个子 Agent 工具，通过闭包绑定请求上下文。"""
 
-
-def _infer_action_from_text(text: str) -> str:
-    """从文本启发式推断 action 类型，避免 reader 模式短路时多一次 LLM call。"""
-    if any(kw in text for kw in ("修改", "更新", "调整", "改成", "改为", "把", "重写")):
-        return "edit"
-    if any(kw in text for kw in ("再加", "继续", "补充", "扩展", "追加", "新增")):
-        return "extend"
-    return "new"
-
-
-def _extract_agent_last_turns(state: "GraphState") -> dict[str, str]:
-    """Extract the last AIMessage content from each agent's messages list."""
-    result: dict[str, str] = {}
-    for agent in ("deepread", "notes", "plan", "recommend"):
-        msgs = state.get(f"{agent}_messages") or []
-        last_ai = ""
-        for m in reversed(msgs):
-            if getattr(m, "type", None) == "ai":
-                last_ai = (getattr(m, "content", "") or "")[:300]
-                break
-        result[agent] = last_ai
-    return result
-
-
-def classify_intent(
-    user_input: str,
-    agent_last_turns: dict[str, str] | None = None,
-) -> IntentSchema:
-    """
-    使用 LLM 做一次结构化意图识别，将请求归类为
-    {recommend, deepread, notes, plan} 之一。
-    支持复合意图检测和 action 类型识别。
-    """
-    llm = get_llm(temperature=0.0)
-    structured_llm = llm.with_structured_output(IntentSchema)
-    turns = agent_last_turns or {}
-
-    prompt = (
-        "你是一个意图区分器，只负责判断下面这句中文请求的类型，"
-        "范围限定在读书相关：找书推荐、针对一本书的精读或问答、"
-        "整理读书笔记、制定阅读计划。\n\n"
-        "请根据用户文本填写 IntentSchema：\n"
-        "- recommend：请求推荐/发现小众书\n"
-        "- deepread：围绕某本书的章节/概念进行精读、解释、问答或基于证据的回答（含自由问答）\n"
-        "- notes：整理/总结/结构化读书笔记\n"
-        "- plan：制定或调整阅读书单/节奏/路线\n\n"
-        f"可参考的子 Agent 最近输出摘要（判断用户是否在引用上一轮结果）：\n"
-        f"- deepread 最近回复：{turns.get('deepread', '')}\n"
-        f"- notes 最近回复：{turns.get('notes', '')}\n"
-        f"- plan 最近回复：{turns.get('plan', '')}\n"
-        f"- recommend 最近回复：{turns.get('recommend', '')}\n\n"
-        "额外判断规则：\n"
-        '- 如果用户一句话要求多件事（如【推荐...并制定计划】），compound_intents 填完整链路，如 ["recommend","plan"]\n'
-        "- 如果用户说【修改/更新/调整/把...改成...】，action=edit\n"
-        "- 如果用户说【再加/继续/补充...】，action=extend\n"
-        "- 如果用户说【XX章节我读完了/已读】，is_progress_update=true，intent=plan\n"
-        "- 不支持动态扇出（如【每本书都做笔记】），compound_intents 留空，在回复中说明需要分步操作\n\n"
-        f"用户输入：{user_input!r}"
-    )
-
-    return structured_llm.invoke(prompt)
-
-
-def supervisor_node(state: GraphState) -> dict:
-    """
-    Supervisor（返回 delta dict，不修改完整 state）：
-    - 安全检查 → 意图识别 → compound pipeline 路由 → agent 分发
-    - agent 完成后返回 supervisor → finalize
-    """
-    print("[Graph] → supervisor_node", file=sys.stdout)
-
-    patch: dict = {}
-
-    # 从 messages 中提取最近一条 human 消息内容；兼容 user_input 字段
-    user_input = state.get("user_input", "") or ""
-    msgs = state.get("messages") or []
-    for m in reversed(msgs):
-        if getattr(m, "type", None) == "human":
-            user_input = getattr(m, "content", "") or user_input
-            break
-
-    # 1) 安全检查：每轮新请求均重新检查（safety_ok=None 表示本轮尚未检查）
-    #    同一轮内 supervisor 被多次调用时（agent 跑完回来），safety_ok 已是 True/False，跳过
-    if state.get("safety_ok") is None:
-        safety_result: InputSafetyResult = run_input_safety_check(user_input)
-        patch["safety_ok"] = safety_result.allowed
-        patch["safety_reason"] = safety_result.reason
-        print(
-            f"[Supervisor] safety_ok={safety_result.allowed}, "
-            f"categories={safety_result.categories}, "
-            f"reason={safety_result.reason}",
-            file=sys.stdout,
+    @tool
+    def deepread_book(query: str, book_source: str = "") -> str:
+        """对书库中的书籍进行深度精读、解析和问答。
+        如果用户提到了特定书籍，在 book_source 中填入书名或路径。
+        支持多次检索以验证证据充分性。每次调用后系统会自动将问答记录到笔记。
+        """
+        result = deps.deepread_agent.run(
+            query=query,
+            book_source=book_source or None,
+            memory_context=memory_context,
         )
-        if not safety_result.allowed:
-            patch["answer"] = f"当前请求未通过安全检查：{safety_result.reason}"
-            patch["next"] = "finalize"
-            return patch
+        ctx.citations = result.citations
+        ctx.retrieved_docs_count = len(result.retrieved_docs)
+        ctx.intent = "deepread"
+        print(f"[Supervisor.tool] deepread_book done, hits={len(result.retrieved_docs)}", file=sys.stdout)
 
-    # 2) 意图识别（只做一次）
-    intent_result: IntentSchema | None = None
-    if state.get("intent") is None:
-        active_tab = state.get("active_tab")
-        # Reader 模式短路：active_tab 已明确且无复合意图信号 → 跳过 LLM 分类
-        if active_tab and not _has_compound_signals(user_input):
-            _TAB_INTENT = {"deepread": "deepread", "notes": "notes",
-                           "plan": "plan", "recommend": "recommend"}
-            tab_intent = _TAB_INTENT.get(active_tab, "deepread")
-            patch["intent"] = tab_intent
-            patch["action"] = _infer_action_from_text(user_input)
-            patch["intent_reason"] = f"reader mode: active_tab={active_tab} → direct route"
-            print(
-                f"[Supervisor] short-circuit route: active_tab={active_tab} → intent={tab_intent}",
-                file=sys.stdout,
-            )
-        else:
-            # Library 模式或含复合意图信号 → LLM 意图分类
-            agent_last_turns = _extract_agent_last_turns(state)
-            intent_result = classify_intent(user_input, agent_last_turns)
-            patch["intent"] = intent_result.intent
-            patch["action"] = intent_result.action
-            patch["intent_reason"] = intent_result.reason
-            if not state.get("book_source") and intent_result.book_source:
-                patch["book_source"] = intent_result.book_source
-            print(
-                f"[Supervisor] intent={intent_result.intent}, action={intent_result.action}, "
-                f"compound_intents={intent_result.compound_intents}, "
-                f"reason={intent_result.reason}",
-                file=sys.stdout,
-            )
+        # 自动触发笔记 hook
+        book_title = ""
+        if result.retrieved_docs:
+            book_title = (result.retrieved_docs[0].metadata or {}).get("book_title", "")
+        if book_title:
+            try:
+                deps.notes_agent.process_qa(query, result.answer, book_title)
+            except Exception as e:
+                print(f"[Supervisor.tool] note hook failed: {e}", file=sys.stderr)
 
-    # 3) agent 已产出 answer 且没有剩余待执行的 agent → finalize
-    #    注意：必须先检查 pending_agents，否则复合流水线第一个 agent 跑完后就会
-    #    提前结束，后续 agent 永远不会被调度。
-    if state.get("answer") and not (state.get("pending_agents") or []):
-        patch["next"] = "finalize"
-        return patch
+        return result.answer
 
-    # 4) 确定本次分发意图
-    effective_intent: str = patch.get("intent") or state.get("intent") or "deepread"
+    @tool
+    def modify_plan(query: str, book_title: str, action: str = "edit") -> str:
+        """修改或扩展用户已有的阅读计划。
+        action: 'edit'（修改内容）或 'extend'（增加内容）
+        book_title: 要修改计划的书名
+        """
+        safe_action: Literal["edit", "extend"] = "extend" if action == "extend" else "edit"
+        result = deps.plan_agent.run(
+            query=query,
+            book_title=book_title,
+            action=safe_action,
+            memory_context=memory_context,
+        )
+        ctx.citations = result.citations
+        ctx.retrieved_docs_count += len(result.retrieved_docs)
+        ctx.intent = "plan"
+        print("[Supervisor.tool] modify_plan done", file=sys.stdout)
+        return result.answer
 
-    # 5) Compound pipeline：首次识别时若有复合意图，填充 pending_agents
-    pending = list(state.get("pending_agents") or [])
-    if intent_result is not None and intent_result.compound_intents and not pending:
-        pending = list(intent_result.compound_intents)
-        patch["compound_context"] = None
+    @tool
+    def recommend_books(
+        query: str,
+        current_book: str = "",
+        recommend_type: str = "discover",
+    ) -> str:
+        """从整个出版世界中推荐值得精读的书籍（不限于本地书库）。
+        recommend_type: discover(发现新书) / similar(相似书) / next(下一本) / theme(主题推荐)
+        会自动标注书籍是否已在本地书库（✅已在库 / 📥可上传）。
+        """
+        result = deps.recommend_agent.run(
+            query=query,
+            current_book=current_book,
+            memory_context=memory_context,
+            recommend_type=recommend_type,  # type: ignore[arg-type]
+        )
+        ctx.intent = "recommend"
+        print("[Supervisor.tool] recommend_books done", file=sys.stdout)
+        return result.answer
 
-    # 6) 决定本次分发给哪个 agent
-    if pending:
-        target = pending.pop(0)
-        patch["pending_agents"] = pending   # 消费一个
-    else:
-        target = effective_intent
-
-    # 7) 构造 task message（注入 compound_context / selected_text / current_chapter）
-    task_content = user_input
-    selected_text = state.get("selected_text") or ""
-    current_chapter = state.get("current_chapter") or ""
-    if selected_text:
-        task_content = f"【用户划选的原文片段】：\n{selected_text}\n\n【用户问题】：\n{task_content}"
-    if current_chapter:
-        task_content += f"\n\n【当前阅读章节】：{current_chapter}"
-    ctx = state.get("compound_context")
-    if ctx:
-        task_content += f"\n\n【前序步骤结果，供参考】：\n{ctx}"
-    task_msg = HumanMessage(content=task_content)
-
-    # 8) 分发到目标 agent
-    book_source = patch.get("book_source") or state.get("book_source")
-
-    ctx_so_far = state.get("compound_context") or ""
-
-    if target == "notes":
-        if not book_source:
-            book_source = _extract_recommended_book(ctx_so_far)
-        patch["notes_messages"] = [task_msg]
-        patch["notes_query"] = user_input
-        patch["notes_book_source"] = book_source
-        patch["next"] = "notes"
-    elif target == "plan":
-        if not book_source:
-            book_source = _extract_recommended_book(ctx_so_far)
-        patch["plan_messages"] = [task_msg]
-        patch["plan_query"] = user_input
-        patch["plan_book_source"] = book_source
-        patch["next"] = "plan"
-    elif target == "recommend":
-        patch["recommend_messages"] = [task_msg]
-        patch["recommend_query"] = user_input
-        patch["next"] = "recommend"
-    else:
-        patch["deepread_messages"] = [task_msg]
-        patch["deepread_query"] = user_input
-        patch["deepread_book_source"] = book_source
-        patch["next"] = "deepread"
-
-    # 9) 进度更新 override：仅当当前轮没有待执行的复合 agent 时才覆盖路由
-    #    否则会打断正在进行的复合流水线（如 ["deepread","notes","plan"] 的中间环节）
-    if intent_result is not None and intent_result.is_progress_update and not pending:
-        patch["plan_messages"] = [task_msg]
-        patch["plan_query"] = user_input
-        patch["next"] = "plan"
-
-    return patch
+    return [deepread_book, modify_plan, recommend_books]
 
 
-_AGENT_SECTION_RE = r'\[(?:推荐|计划|笔记|精读)结果\]'
+# ---------------------------------------------------------------------------
+# 图构建
+# ---------------------------------------------------------------------------
 
-
-def _extract_recommended_book(ctx: str) -> str | None:
-    """从 compound_context 中提取前序 recommend 推荐的第一本书名。"""
-    if not ctx or "[推荐结果]" not in ctx:
-        return None
-    m = re.search(r"###\s+《(.+?)》", ctx) or re.search(r"《(.+?)》", ctx)
-    return m.group(1) if m else None
-
-
-def _synthesize_compound_answer(user_input: str, compound_ctx: str, last_answer: str) -> str:
-    """当多个 agent 依次运行时，将各步结果整合为一份完整回答。"""
-    llm = get_llm(temperature=0.3)
-    prompt = (
-        f"用户请求：{user_input}\n\n"
-        f"多个 Agent 已依次完成任务，结果如下：\n{compound_ctx}\n\n"
-        "请将以上多步结果整合为一份完整、连贯的 Markdown 回答。"
-    )
-    msg = llm.invoke([{"role": "user", "content": prompt}])
-    return getattr(msg, "content", str(msg)) or last_answer
-
-
-def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_memory: bool = True, _return_deps: bool = False):
+def build_minimal_supervisor_graph(
+    *,
+    store: ChromaStore | None = None,
+    enable_memory: bool = True,
+    _return_deps: bool = False,
+):
     """
-    构建 supervisor 编排图：
+    构建简化的 ReAct Supervisor 编排图：
 
-    START -> memory_search -> supervisor -> [deepread|notes|plan|recommend] -> supervisor -> finalize -> END
+    START → memory_search → react_supervisor → finalize → END
 
-    所有节点函数返回 delta dict（不修改完整 state），由 LangGraph 合并。
+    Supervisor 是一个 ReAct Agent，子 Agent 作为其工具。
     """
     if store is None:
-        settings = get_settings()
         store = ChromaStore()
 
     settings = get_settings()
     mem0 = Mem0Store() if enable_memory else None
 
+    note_vector_store = make_note_vector_store(settings)
     deps = GraphDeps(
         deepread_agent=DeepReadAgent(store=store),
-        notes_agent=NoteAgent(store=store),
-        plan_agent=ReadingPlanAgent(store=store),
+        notes_agent=NoteAgent(note_vector_store=note_vector_store),
+        plan_agent=PlanEditor(store=store),
         recommend_agent=RecommendationAgent(store=store),
         mem0=mem0,
-        note_storage=make_note_storage(settings),
-        plan_storage=make_plan_storage(settings),
     )
+
+    llm = get_llm(temperature=0.1)
 
     def _memory_search(state: GraphState) -> dict:
         print("[Graph] → memory_search_node", file=sys.stdout)
@@ -438,95 +267,90 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_m
             print(f"[Memory] 找到 {len(past)} 条历史记忆", file=sys.stdout)
         return {"memory_context": ctx}
 
+    def _react_supervisor(state: GraphState, config) -> dict:
+        print("[Graph] → react_supervisor_node", file=sys.stdout)
+        thread_id = config["configurable"].get("thread_id", "default")
+        user_input = state.get("user_input", "") or ""
+
+        # 1) 安全检查
+        safety_result: InputSafetyResult = run_input_safety_check(user_input)
+        if not safety_result.allowed:
+            print(f"[Supervisor] safety blocked: {safety_result.reason}", file=sys.stdout)
+            return {
+                "safety_ok": False,
+                "safety_reason": safety_result.reason,
+                "answer": f"当前请求未通过安全检查：{safety_result.reason}",
+                "citations": [],
+                "retrieved_docs_count": 0,
+                "intent": "deepread",
+            }
+
+        memory_context = state.get("memory_context", "") or ""
+
+        ctx = RequestContext()
+
+        # 构建 supervisor ReAct agent（每次请求重建以捕获最新上下文）
+        tools = _build_supervisor_tools(deps, ctx, memory_context, thread_id)
+        supervisor_agent = create_react_agent(llm, tools, prompt=SUPERVISOR_SYSTEM)
+
+        # 构造用户消息（注入 reader 模式上下文）
+        task_content = user_input
+        selected_text = state.get("selected_text") or ""
+        current_chapter = state.get("current_chapter") or ""
+
+        if selected_text:
+            task_content = f"【用户划选的原文片段】：\n{selected_text}\n\n【用户问题】：\n{task_content}"
+        if current_chapter:
+            task_content += f"\n\n【当前阅读章节】：{current_chapter}"
+
+        # 传入近期对话历史（多轮上下文）
+        recent_messages = list(state.get("messages") or [])
+        # 去掉最后一条 human message（它会在 invoke 时重新作为 user 传入）
+        if recent_messages and getattr(recent_messages[-1], "type", None) == "human":
+            recent_messages = recent_messages[:-1]
+        # 保留最近 8 条消息作为上下文
+        history_for_agent = recent_messages[-8:] if len(recent_messages) > 8 else recent_messages
+
+        input_messages = list(history_for_agent) + [("user", task_content)]
+
+        print(f"[Supervisor] invoking react agent, user_input={user_input[:80]!r}", file=sys.stdout)
+
+        result = supervisor_agent.invoke(
+            {"messages": input_messages},
+            config={"recursion_limit": 14},
+        )
+
+        answer = result["messages"][-1].content
+
+        return {
+            "safety_ok": True,
+            "answer": answer,
+            "citations": ctx.citations,
+            "retrieved_docs_count": ctx.retrieved_docs_count,
+            "intent": ctx.intent,
+            "messages": [AIMessage(content=answer)],
+        }
+
     def _finalize(state: GraphState) -> dict:
         print("[Graph] → finalize_node", file=sys.stdout)
-        patch: dict = {"next": "end"}
         answer = state.get("answer") or ""
-        ctx = state.get("compound_context") or ""
-        # 多 agent 运行时（compound_context 含多个 agent 输出标记）→ 合成统一回答
-        if ctx and len(re.findall(_AGENT_SECTION_RE, ctx)) > 1:
-            answer = _synthesize_compound_answer(
-                state.get("user_input", ""), ctx, answer
-            )
-            patch["answer"] = answer
-        if answer:
-            patch["messages"] = [AIMessage(content=answer)]
         if deps.mem0 and answer and state.get("user_input"):
             deps.mem0.add_qa(state["user_input"], answer)
             print("[Memory] 已保存本次问答到 Mem0", file=sys.stdout)
-        return patch
+        return {}
 
-    def _deepread(state: GraphState) -> dict:
-        print("[Graph] → deepread_node", file=sys.stdout)
-        patch = deepread_node(state, agent=deps.deepread_agent)  # type: ignore[arg-type]
-        print(
-            f"[Graph]   deepread_node done, retrieved_docs_count={patch.get('retrieved_docs_count', 0)}",
-            file=sys.stdout,
-        )
-        return patch
-
-    def _notes(state: GraphState, config) -> dict:
-        print("[Graph] → notes_node", file=sys.stdout)
-        thread_id = config["configurable"].get("thread_id", "default")
-        patch = notes_node(state, agent=deps.notes_agent, deps=deps, thread_id=thread_id)  # type: ignore[arg-type]
-        print(
-            f"[Graph]   notes_node done, retrieved_docs_count={patch.get('retrieved_docs_count', 0)}",
-            file=sys.stdout,
-        )
-        return patch
-
-    def _plan(state: GraphState, config) -> dict:
-        print("[Graph] → plan_node", file=sys.stdout)
-        thread_id = config["configurable"].get("thread_id", "default")
-        patch = plan_node(state, agent=deps.plan_agent, deps=deps, thread_id=thread_id)  # type: ignore[arg-type]
-        print(
-            f"[Graph]   plan_node done, retrieved_docs_count={patch.get('retrieved_docs_count', 0)}",
-            file=sys.stdout,
-        )
-        return patch
-
-    def _recommend(state: GraphState) -> dict:
-        print("[Graph] → recommend_node", file=sys.stdout)
-        patch = recommend_node(state, agent=deps.recommend_agent)  # type: ignore[arg-type]
-        print(
-            f"[Graph]   recommend_node done, retrieved_docs_count={patch.get('retrieved_docs_count', 0)}",
-            file=sys.stdout,
-        )
-        return patch
-
+    # 图构建
     graph = StateGraph(GraphState)
     graph.add_node("memory_search", _memory_search)
-    graph.add_node("supervisor", supervisor_node)
-    graph.add_node("deepread", _deepread)
-    graph.add_node("notes", _notes)
-    graph.add_node("plan", _plan)
-    graph.add_node("recommend", _recommend)
+    graph.add_node("react_supervisor", _react_supervisor)
     graph.add_node("finalize", _finalize)
 
     graph.add_edge(START, "memory_search")
-    graph.add_edge("memory_search", "supervisor")
-    graph.add_conditional_edges(
-        "supervisor",
-        lambda s: s.get("next", "deepread"),
-        {
-            "deepread": "deepread",
-            "notes": "notes",
-            "plan": "plan",
-            "recommend": "recommend",
-            "finalize": "finalize",
-        },
-    )
-    graph.add_edge("deepread", "supervisor")
-    graph.add_edge("notes", "supervisor")
-    graph.add_edge("plan", "supervisor")
-    graph.add_edge("recommend", "supervisor")
-    graph.add_conditional_edges(
-        "finalize",
-        lambda s: s.get("next", "end"),
-        {"end": END},
-    )
+    graph.add_edge("memory_search", "react_supervisor")
+    graph.add_edge("react_supervisor", "finalize")
+    graph.add_edge("finalize", END)
 
-    # SqliteSaver 持久化 checkpointer（降级到 MemorySaver 若包未安装）
+    # Checkpointer
     if _SQLITE_AVAILABLE:
         import os
         os.makedirs("data", exist_ok=True)
@@ -541,13 +365,16 @@ def build_minimal_supervisor_graph(*, store: ChromaStore | None = None, enable_m
     return compiled
 
 
+# ---------------------------------------------------------------------------
+# 全局单例 + 入口
+# ---------------------------------------------------------------------------
+
 _minimal_app = None
 _minimal_deps: GraphDeps | None = None
 
 
 def invalidate_bm25_caches() -> None:
-    """入库新书后调用，清除 NoteAgent / ReadingPlanAgent 的 BM25 索引缓存。
-    下次查询时会从 ChromaDB 重新拉取全量文档（含新书）构建索引。"""
+    """入库新书后调用，清除 NoteAgent / ReadingPlanAgent 的 BM25 索引缓存。"""
     if _minimal_deps is None:
         return
     for agent in (_minimal_deps.notes_agent, _minimal_deps.plan_agent):
@@ -561,20 +388,13 @@ def run_minimal_graph(
     *,
     book_source: str | None = None,
     thread_id: str = "default",
-    active_tab: str | None = None,
     selected_text: str | None = None,
     current_chapter: str | None = None,
 ) -> GraphState:
     """
     支持多轮对话的入口：
-    - 相同 thread_id 下，多次调用会共享同一条对话历史（messages）。
+    - 相同 thread_id 下，多次调用会共享同一条对话历史。
     - 不同 thread_id 互相隔离。
-
-    Reader 模式专用参数：
-    - active_tab: 前端当前激活的 tab（deepread/notes/plan/recommend），
-      有值时跳过 LLM 意图分类，直接路由到对应 Agent。
-    - selected_text: 用户在 EPUB 阅读器中划选的原文片段，注入为问题上下文。
-    - current_chapter: 当前阅读章节，注入为问题上下文。
     """
     global _minimal_app, _minimal_deps
     if _minimal_app is None:
@@ -586,20 +406,14 @@ def run_minimal_graph(
         "messages": [("user", query)],
         "user_input": query,
         "book_source": book_source,
-        "active_tab": active_tab,        # type: ignore[typeddict-item]
-        "selected_text": selected_text,  # type: ignore[typeddict-item]
-        "current_chapter": current_chapter,  # type: ignore[typeddict-item]
-        # ── 每轮重置瞬态字段，防止跨轮 checkpoint 污染 ──────────────────
-        # intent/action：强制重新分类，避免旧 action（如 edit）污染新轮意图
-        "intent": None,
-        "action": None,
-        # answer：清空上轮结果，让 supervisor 正确判断当前轮是否已完成
+        "selected_text": selected_text,    # type: ignore[typeddict-item]
+        "current_chapter": current_chapter,# type: ignore[typeddict-item]
+        # 每轮重置安全状态（强制重新检查）
+        "safety_ok": None,                 # type: ignore[typeddict-item]
+        # 每轮重置输出（防止跨轮 checkpoint 污染）
         "answer": "",
-        # pending_agents：清空上轮复合流水线队列，防止中断后的残余队列
-        "pending_agents": [],
-        # compound_context：每轮独立积累，不携带上轮内容
-        "compound_context": None,
-        # safety_ok：None 表示本轮尚未做安全检查，supervisor 会重新执行
-        "safety_ok": None,  # type: ignore[typeddict-item]
+        "citations": [],
+        "retrieved_docs_count": 0,
+        "intent": "",
     }
     return app.invoke(init, config={"configurable": {"thread_id": thread_id}})  # type: ignore[return-value]
