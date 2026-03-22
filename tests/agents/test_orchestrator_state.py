@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 from backend.agents.orchestrator_agent import (
     GraphState,
     RequestContext,
+    _build_supervisor_tools,
     _resolve_book_title,
     _title_from_docs,
 )
@@ -109,5 +110,108 @@ def test_title_from_docs_skips_docs_without_title():
 
 def test_title_from_docs_returns_empty_when_no_docs():
     assert _title_from_docs([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# _build_supervisor_tools — 闭包注入测试
+# ---------------------------------------------------------------------------
+
+def _make_deps():
+    """构建包含所有 agent mock 的 GraphDeps-like 对象。"""
+    deps = MagicMock()
+
+    deepread_result = MagicMock()
+    deepread_result.citations = []
+    deepread_result.retrieved_docs = []
+    deepread_result.answer = "deep answer"
+    deps.deepread_agent.run.return_value = deepread_result
+
+    plan_result = MagicMock()
+    plan_result.citations = []
+    plan_result.retrieved_docs = []
+    plan_result.answer = "plan answer"
+    deps.plan_agent.run.return_value = plan_result
+
+    recommend_result = MagicMock()
+    recommend_result.answer = "recommend answer"
+    deps.recommend_agent.run.return_value = recommend_result
+
+    return deps
+
+
+def test_deepread_tool_uses_closure_book_source():
+    deps = _make_deps()
+    ctx = RequestContext()
+    tools = _build_supervisor_tools(
+        deps, ctx, memory_context="", thread_id="t1",
+        book_source="data/books/kant.epub", book_title="纯粹理性批判",
+    )
+    deepread = next(t for t in tools if t.name == "deepread_book")
+    deepread.invoke({"query": "什么是先验感性论"})
+    deps.deepread_agent.run.assert_called_once_with(
+        query="什么是先验感性论",
+        book_source="data/books/kant.epub",
+        memory_context="",
+    )
+
+
+def test_modify_plan_tool_uses_closure_book_title():
+    deps = _make_deps()
+    ctx = RequestContext()
+    tools = _build_supervisor_tools(
+        deps, ctx, memory_context="", thread_id="t1",
+        book_source="data/books/kant.epub", book_title="纯粹理性批判",
+    )
+    plan = next(t for t in tools if t.name == "modify_plan")
+    plan.invoke({"query": "增加第三章", "action": "extend"})
+    deps.plan_agent.run.assert_called_once_with(
+        query="增加第三章",
+        book_title="纯粹理性批判",
+        action="extend",
+        memory_context="",
+    )
+
+
+def test_modify_plan_returns_error_when_no_book_title():
+    deps = _make_deps()
+    ctx = RequestContext()
+    tools = _build_supervisor_tools(
+        deps, ctx, memory_context="", thread_id="t1",
+        book_source=None, book_title="",
+    )
+    plan = next(t for t in tools if t.name == "modify_plan")
+    result = plan.invoke({"query": "增加第三章"})
+    assert "未打开" in result
+    deps.plan_agent.run.assert_not_called()
+
+
+def test_recommend_tool_uses_closure_book_title():
+    deps = _make_deps()
+    ctx = RequestContext()
+    tools = _build_supervisor_tools(
+        deps, ctx, memory_context="", thread_id="t1",
+        book_source="data/books/kant.epub", book_title="纯粹理性批判",
+    )
+    rec = next(t for t in tools if t.name == "recommend_books")
+    rec.invoke({"query": "推荐相似书", "recommend_type": "similar"})
+    deps.recommend_agent.run.assert_called_once_with(
+        query="推荐相似书",
+        current_book="纯粹理性批判",
+        memory_context="",
+        recommend_type="similar",
+    )
+
+
+def test_recommend_tool_passes_empty_string_when_no_book():
+    deps = _make_deps()
+    ctx = RequestContext()
+    tools = _build_supervisor_tools(
+        deps, ctx, memory_context="", thread_id="t1",
+        book_source=None, book_title="",
+    )
+    rec = next(t for t in tools if t.name == "recommend_books")
+    rec.invoke({"query": "推荐好书"})
+    call_kwargs = deps.recommend_agent.run.call_args.kwargs
+    assert call_kwargs["current_book"] == ""
 
 

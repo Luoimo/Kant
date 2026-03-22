@@ -149,18 +149,19 @@ def _build_supervisor_tools(
     ctx: RequestContext,
     memory_context: str,
     thread_id: str,
+    book_source: str | None,
+    book_title: str,
 ):
-    """构建 3 个子 Agent 工具，通过闭包绑定请求上下文。"""
+    """构建 3 个子 Agent 工具，通过闭包绑定请求上下文和当前书籍信息。"""
 
     @tool
-    def deepread_book(query: str, book_source: str = "") -> str:
-        """对书库中的书籍进行深度精读、解析和问答。
-        如果用户提到了特定书籍，在 book_source 中填入书名或路径。
+    def deepread_book(query: str) -> str:
+        """对当前打开的书籍进行深度精读、解析和问答。
         支持多次检索以验证证据充分性。每次调用后系统会自动将问答记录到笔记。
         """
         result = deps.deepread_agent.run(
             query=query,
-            book_source=book_source or None,
+            book_source=book_source,
             memory_context=memory_context,
         )
         ctx.citations = result.citations
@@ -168,24 +169,23 @@ def _build_supervisor_tools(
         ctx.intent = "deepread"
         print(f"[Supervisor.tool] deepread_book done, hits={len(result.retrieved_docs)}", file=sys.stdout)
 
-        # 自动触发笔记 hook
-        book_title = ""
-        if result.retrieved_docs:
-            book_title = (result.retrieved_docs[0].metadata or {}).get("book_title", "")
-        if book_title:
+        # 自动触发笔记 hook：优先使用闭包中的 book_title，fallback 到文档元数据
+        resolved_title = book_title or _title_from_docs(result.retrieved_docs)
+        if resolved_title:
             try:
-                deps.notes_agent.process_qa(query, result.answer, book_title)
+                deps.notes_agent.process_qa(query, result.answer, resolved_title)
             except Exception as e:
                 print(f"[Supervisor.tool] note hook failed: {e}", file=sys.stderr)
 
         return result.answer
 
     @tool
-    def modify_plan(query: str, book_title: str, action: str = "edit") -> str:
-        """修改或扩展用户已有的阅读计划。
+    def modify_plan(query: str, action: str = "edit") -> str:
+        """修改或扩展当前书籍的阅读计划。
         action: 'edit'（修改内容）或 'extend'（增加内容）
-        book_title: 要修改计划的书名
         """
+        if not book_title:
+            return "当前未打开任何书籍，无法修改计划。"
         safe_action: Literal["edit", "extend"] = "extend" if action == "extend" else "edit"
         result = deps.plan_agent.run(
             query=query,
@@ -194,24 +194,20 @@ def _build_supervisor_tools(
             memory_context=memory_context,
         )
         ctx.citations = result.citations
-        ctx.retrieved_docs_count += len(result.retrieved_docs)
+        ctx.retrieved_docs_count += len(result.retrieved_docs)  # PlanEditor 始终返回空列表，+= 为一致性
         ctx.intent = "plan"
         print("[Supervisor.tool] modify_plan done", file=sys.stdout)
         return result.answer
 
     @tool
-    def recommend_books(
-        query: str,
-        current_book: str = "",
-        recommend_type: str = "discover",
-    ) -> str:
+    def recommend_books(query: str, recommend_type: str = "discover") -> str:
         """从整个出版世界中推荐值得精读的书籍（不限于本地书库）。
         recommend_type: discover(发现新书) / similar(相似书) / next(下一本) / theme(主题推荐)
         会自动标注书籍是否已在本地书库（✅已在库 / 📥可上传）。
         """
         result = deps.recommend_agent.run(
             query=query,
-            current_book=current_book,
+            current_book=book_title or "",
             memory_context=memory_context,
             recommend_type=recommend_type,  # type: ignore[arg-type]
         )
