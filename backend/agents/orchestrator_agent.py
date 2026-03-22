@@ -29,6 +29,12 @@ from backend.rag.chroma.chroma_store import ChromaStore
 from backend.security.input_filter import InputSafetyResult, run_input_safety_check
 from backend.storage.note_vector_store import make_note_vector_store
 
+# Register Citation so LangGraph's msgpack checkpointer can deserialize it
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+_SERDE = JsonPlusSerializer(
+    allowed_msgpack_modules=[("backend.xai.citation", "Citation")]
+)
+
 
 # ---------------------------------------------------------------------------
 # 书名解析工具函数
@@ -336,9 +342,9 @@ def build_minimal_supervisor_graph(
         import os
         os.makedirs("data", exist_ok=True)
         conn = _sqlite3.connect("data/checkpoints.db", check_same_thread=False)
-        checkpointer = SqliteSaver(conn)
+        checkpointer = SqliteSaver(conn, serde=_SERDE)
     else:
-        checkpointer = SqliteSaver()  # type: ignore[call-arg]
+        checkpointer = SqliteSaver(serde=_SERDE)  # type: ignore[call-arg]
 
     compiled = graph.compile(checkpointer=checkpointer)
     if _return_deps:
