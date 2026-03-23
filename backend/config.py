@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # Single collection for all book chunks (agents read from here)
     books_collection_name: str = "kant_library"
 
+    # SQLite book catalog and cover image directory
+    book_catalog_db: str = "data/books.db"
+    covers_dir: str = "data/covers"
+
 
 def get_settings() -> Settings:
     return Settings()

@@ -127,6 +127,46 @@ class EpubExtractor:
         book = epub.read_epub(str(self.path), options={"ignore_ncx": False})
         return self._extract_metadata(book)
 
+    @staticmethod
+    def extract_cover(epub_path: str | Path, dest_dir: str | Path, book_id: str) -> str:
+        """
+        从 EPUB 提取封面图片，保存到 dest_dir/{book_id}.{ext}。
+
+        优先匹配文件名含 'cover' 的图片，其次取第一张图片。
+        返回保存路径字符串，找不到封面时返回空字符串。
+        """
+        book = epub.read_epub(str(epub_path), options={"ignore_ncx": False})
+
+        cover_item = None
+        first_image = None
+        for item in book.get_items():
+            if item.get_type() != ebooklib.ITEM_IMAGE:
+                continue
+            if first_image is None:
+                first_image = item
+            if "cover" in (item.get_name() or "").lower():
+                cover_item = item
+                break
+
+        target = cover_item or first_image
+        if target is None:
+            return ""
+
+        media_type = getattr(target, "media_type", "") or ""
+        if "png" in media_type:
+            ext = ".png"
+        elif "gif" in media_type:
+            ext = ".gif"
+        elif "webp" in media_type:
+            ext = ".webp"
+        else:
+            ext = ".jpg"
+
+        dest = Path(dest_dir) / f"{book_id}{ext}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(target.get_content())
+        return str(dest)
+
     # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------

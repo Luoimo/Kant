@@ -1,7 +1,37 @@
 import pytest
 from pathlib import Path
 from backend.storage.note_storage import LocalNoteStorage
-from backend.storage.plan_storage import LocalPlanStorage
+from backend.storage.plan_storage import LocalPlanStorage, safe_plan_name
+
+
+class TestSafePlanName:
+    def test_strips_chinese_brackets(self):
+        assert safe_plan_name("《纯粹理性批判》") == "纯粹理性批判"
+
+    def test_strips_angle_brackets(self):
+        assert safe_plan_name("<test>") == "test"
+
+    def test_fallback_for_empty(self):
+        assert safe_plan_name("") == "unknown"
+
+
+class TestLocalPlanStorageFindByBook:
+    def test_find_by_book_returns_path_when_exists(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save("plan content", safe_plan_name("纯粹理性批判"))
+        path = storage.find_by_book("纯粹理性批判")
+        assert path is not None
+        assert path.endswith(".md")
+
+    def test_find_by_book_returns_none_when_missing(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        assert storage.find_by_book("不存在的书") is None
+
+    def test_find_by_book_sanitizes_title(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save("content", safe_plan_name("《纯粹理性批判》"))
+        path = storage.find_by_book("《纯粹理性批判》")
+        assert path is not None
 
 
 class TestLocalNoteStorage:
@@ -54,6 +84,17 @@ class TestLocalNoteStorage:
         with pytest.raises(FileNotFoundError):
             storage.load(str(tmp_path / "nonexistent.md"))
 
+    def test_update_overwrites_content(self, tmp_path):
+        storage = LocalNoteStorage(root=tmp_path)
+        path = storage.save("# Original", "note_001")
+        storage.update(path, "# Updated")
+        assert storage.load(path) == "# Updated"
+
+    def test_save_returns_str_or_none(self, tmp_path):
+        storage = LocalNoteStorage(root=tmp_path)
+        result = storage.save("content", "note_x")
+        assert result is None or isinstance(result, str)
+
 
 class TestLocalPlanStorage:
     def test_save_and_load(self, tmp_path):
@@ -104,3 +145,36 @@ class TestLocalPlanStorage:
         storage = LocalPlanStorage(root=tmp_path)
         with pytest.raises(FileNotFoundError):
             storage.load(str(tmp_path / "nonexistent.md"))
+
+    def test_update_overwrites_content(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        path = storage.save("# Original", "plan_001")
+        storage.update(path, "# Updated")
+        assert storage.load(path) == "# Updated"
+
+    def test_save_returns_str_or_none(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        result = storage.save("content", "plan_x")
+        assert result is None or isinstance(result, str)
+
+    def test_mark_chapter_done_toggles_checkbox(self, tmp_path):
+        content = "## 章节进度\n\n- [ ] 先验感性论（约45分钟）\n- [ ] 先验分析论（约90分钟）\n"
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save(content, safe_plan_name("纯粹理性批判"))
+        result = storage.mark_chapter_done("纯粹理性批判", "先验感性论")
+        assert result is True
+        updated = (tmp_path / "纯粹理性批判.md").read_text(encoding="utf-8")
+        assert "- [x] 先验感性论" in updated
+        assert "- [ ] 先验分析论" in updated
+
+    def test_mark_chapter_done_returns_false_when_not_found(self, tmp_path):
+        content = "## 章节进度\n\n- [ ] 先验感性论（约45分钟）\n"
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save(content, safe_plan_name("纯粹理性批判"))
+        result = storage.mark_chapter_done("纯粹理性批判", "不存在的章节")
+        assert result is False
+
+    def test_mark_chapter_done_returns_false_when_no_plan(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        result = storage.mark_chapter_done("不存在的书", "第1章")
+        assert result is False

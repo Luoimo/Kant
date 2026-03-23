@@ -30,10 +30,13 @@ backend/
     orchestrator_agent.py  LangGraph 图 + Supervisor 逻辑
     deepread_agent.py      精读问答 Agent
     note_agent.py          笔记 Agent
-    reading_plan_agent.py  阅读计划 Agent
+    plan_editor.py         阅读计划 Agent（generate + ReAct edit/extend）
     recommendation_agent.py 书籍推荐 Agent
   api/
-    chat.py                FastAPI 路由（POST /chat, POST /books/upload）
+    chat.py                POST /chat, POST /books/upload, GET /books
+    reader.py              Reader Mode 端点（init/plan/progress）
+    notes.py               笔记端点
+    books.py               书籍管理端点
   config.py                Pydantic Settings，读取 .env
   llm/                     OpenAI LLM & Embeddings 封装
   main.py                  FastAPI app 入口
@@ -44,7 +47,7 @@ backend/
       chroma_store.py      ChromaStore（向量库管理，支持本地/Cloud 双模式）
     chunker/               文本切块（TextChunker）
     cleaner/               文本清洗（TextCleaner）
-    extracter/             EPUB 解析（EpubExtractor）
+    extracter/             EPUB 解析（EpubExtractor，含封面提取）
     retriever/
       hybrid_retriever.py  混合检索（BM25 + 向量 RRF 融合 + 重排）
       bm25_retriever.py    BM25 关键词检索（jieba 分词）
@@ -53,16 +56,19 @@ backend/
   security/
     input_filter.py        输入安全过滤
   storage/
-    note_storage.py        笔记持久化（LocalNoteStorage）
-    plan_storage.py        阅读计划持久化（LocalPlanStorage）
+    book_catalog.py        SQLite 目录（BookCatalog / NoteCatalog / PlanCatalog）
+    note_storage.py        笔记文件 I/O（LocalNoteStorage）
+    plan_storage.py        阅读计划文件 I/O（LocalPlanStorage）
   xai/
     citation.py            Citation 引用构建
 
 data/                      运行时数据（不提交 Git）
   books/                   EPUB 书库
+  books.db                 书籍/笔记/计划元数据（SQLite）
   chroma/                  ChromaDB 向量库（本地模式）
-  notes/                   笔记 Markdown 文件
-  plans/                   阅读计划 Markdown 文件
+  covers/                  EPUB 封面图片
+  notes/                   笔记 Markdown 文件（以 book_id 命名）
+  plans/                   阅读计划 Markdown 文件（以 book_id 命名）
   checkpoints.db           LangGraph 多轮对话检查点（SQLite）
 
 scripts/
@@ -72,6 +78,7 @@ scripts/
 tests/
   rag/                     RAG 组件单元测试
   agents/                  Agent 单元测试
+  api/                     API 端点单元测试
   storage/                 Storage 单元测试
 ```
 
@@ -107,6 +114,12 @@ MEM0_USER_ID=default_user
 # 笔记和阅读计划存储目录
 NOTE_STORAGE_DIR=data/notes
 PLAN_STORAGE_DIR=data/plans
+
+# SQLite 目录数据库（书籍/笔记/计划元数据）
+BOOK_CATALOG_DB=data/books.db
+
+# EPUB 封面提取目录
+COVERS_DIR=data/covers
 ```
 
 ### 3. 启动 API
@@ -126,6 +139,7 @@ curl -X POST http://localhost:8000/books/upload \
 
 ```json
 {
+  "book_id": "a1b2c3d4-...",
   "source": "data/books/book.epub",
   "collection_name": "kant_library",
   "total_chunks": 860,
@@ -164,7 +178,7 @@ curl -X POST http://localhost:8000/chat \
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `query` | string | 用户输入 |
-| `book_source` | string? | 指定书的文件路径（限定检索范围） |
+| `book_id` | string? | 指定书的 UUID（限定检索范围） |
 | `thread_id` | string | 会话 ID，同一 ID 共享多轮上下文（默认 `"default"`） |
 | `active_tab` | string? | 前端当前标签页，直接路由到对应 Agent，跳过意图分类 |
 | `selected_text` | string? | 用户在阅读器中划选的原文，注入为问题上下文 |
@@ -179,11 +193,32 @@ curl -X POST http://localhost:8000/chat \
 | `retrieved_docs_count` | 检索到的文档数量 |
 | `intent` | 识别到的意图（`deepread` / `notes` / `plan` / `recommend`） |
 
+### GET /books
+
+- 返回所有书籍列表，来自 SQLite `BookCatalog`
+- 每条包含 `book_id`、`title`、`author`、`status`、`progress`、`cover_path` 等完整字段
+
 ### POST /books/upload
 
 - 上传 `.epub` 文件（multipart/form-data）
-- 触发入库流水线：解析 → 切块 → 向量化 → 写入 ChromaDB
+- 触发入库流水线：解析 → 切块 → 向量化 → 写入 ChromaDB → 写入 SQLite → 提取封面
 - 入库成功后自动刷新 BM25 索引缓存
+- 响应含 `book_id`（确定性 uuid5，后续所有操作均以此为主键）
+
+### POST /reader/{book_id}/init
+
+- 用户打开书籍时调用，幂等
+- 自动生成阅读计划（提取全部章节 + LLM 建议日程），写入 `data/plans/{book_id}.md`
+- 更新书籍状态为 `"reading"`
+
+### GET /reader/{book_id}/plan
+
+- 返回当前阅读计划 Markdown，通过 `PlanCatalog` 定位文件
+
+### POST /reader/{book_id}/progress
+
+- 请求体：`{"chapter": "章节名"}`
+- 将对应章节标记为已读（`- [ ]` → `- [x]`），重新计算完成进度，同步到 `BookCatalog`
 
 ---
 
@@ -198,10 +233,12 @@ curl -X POST http://localhost:8000/chat \
 支持 4 种笔记格式：`structured`（结构化）/ `summary`（摘要）/ `qa`（问答）/ `timeline`（时间线）。支持 `new`（新建）/ `edit`（编辑）/ `extend`（追加）操作，笔记以 Markdown 文件存储在 `data/notes/`。
 
 #### RecommendationAgent — 书籍推荐
-基于大模型自身知识推荐书籍，不局限于本地书库，可以推荐用户尚未上传的书。从本地书库获取已有书目仅用于标注（`✅ 已在库` / `📥 可上传精读`）。多轮对话中自动避免重复推荐。
+基于大模型自身知识推荐书籍，不局限于本地书库，可以推荐用户尚未上传的书。多轮对话中自动避免重复推荐。
 
-#### ReadingPlanAgent — 阅读计划
-从 ChromaDB 中提取真实章节结构，按阅读速度（300字/分钟）计算每章时长，生成个性化进度安排。支持 `new` / `edit` / `extend` 操作，计划以 Markdown 文件存储在 `data/plans/`。若指定的书不在书库中，基于大模型知识生成计划并注明来源限制。
+#### PlanEditor — 阅读计划
+两种工作路径：
+- **generate()** — Reader Mode 打开书时自动调用：从 ChromaDB 分页获取全部 chunk 提取章节结构（section_title 优先），按 300字/分钟 计算时长，调用 LLM 生成建议日程，写入 `data/plans/{book_id}.md`，注册到 `PlanCatalog`
+- **run()** — 聊天中触发 edit/extend：使用 LangGraph ReAct agent，通过 `load_existing_plan` / `get_chapter_structure` 工具修改计划
 
 ### 多 Agent 串联
 
@@ -265,7 +302,7 @@ pytest tests/ --cov=backend --cov-report=html
 pytest tests/agents/test_recommendation_agent.py -v
 ```
 
-所有单元测试使用内存 fixture，无需真实 EPUB 文件或 API 调用（185 个测试）。
+所有单元测试使用内存 fixture 和 mock，无需真实 EPUB 文件或 API 调用。
 
 ---
 

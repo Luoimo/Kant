@@ -54,6 +54,12 @@ MEM0_USER_ID=default_user
 # Persistent storage directories for notes and reading plans
 NOTE_STORAGE_DIR=data/notes
 PLAN_STORAGE_DIR=data/plans
+
+# SQLite catalog for books/notes/plans metadata
+BOOK_CATALOG_DB=data/books.db
+
+# Directory for extracted EPUB covers
+COVERS_DIR=data/covers
 ```
 
 Settings are read by `backend/config.py` via Pydantic Settings.
@@ -73,11 +79,9 @@ EPUB → EpubExtractor → TextCleaner → TextChunker → OpenAI Embeddings →
 All book chunks go into a **single collection** (`kant_library` by default, configurable via `books_collection_name`). Books are distinguished by the `source` metadata field (full file path). There is no separate per-book collection or catalog collection.
 
 Key `ChromaStore` methods:
-- `ingest(path)` — full pipeline: extract → clean → chunk → embed → upsert (batched dedup with `embed_batch_size` to respect Chroma Cloud 300-record Get limit)
+- `ingest(path)` — full pipeline: extract → clean → chunk → embed → upsert (batched dedup with `embed_batch_size` to respect Chroma Cloud 300-record Get limit); returns `IngestResult` with `book_title`, `author`, `source`, `total_chunks`, `added`, `skipped`
 - `similarity_search(query, k, filter)` — vector search with optional `{"source": ...}` filter
-- `list_sources()` — distinct source file paths currently in the collection
-- `list_book_titles()` — lightweight book catalog: `[{"book_title", "author", "source"}]` built by fetching 1 metadata record per source; used by `RecommendationAgent`
-- `get_all_documents(filter)` — bulk fetch used by BM25 index construction
+- `get_all_documents(filter)` — bulk fetch used by BM25 index construction and chapter extraction; uses paginated loop (limit+offset) to work around Chroma Cloud's 300-record-per-request `Get` limit
 
 `backend/rag/retriever/` provides additional retrieval components:
 - `BM25Retriever` — keyword-based sparse retrieval using `rank_bm25` + jieba tokenization
@@ -123,22 +127,30 @@ Entry point: `run_minimal_graph(query, *, book_source, thread_id)` — `thread_i
 
 **RecommendationAgent** (`backend/agents/recommendation_agent.py`)
 - Recommends books from **LLM training knowledge**, not limited to the local library
-- Fetches local library via `store.list_book_titles()` solely to annotate results: `✅ 已在库` / `📥 可上传精读`
 - Never does RAG retrieval — `citations` and `retrieved_docs` are always empty lists
 - Multi-turn de-duplication: extracts previously recommended titles from `recommend_messages` history and excludes them from the next prompt
 
-**ReadingPlanAgent** (`backend/agents/reading_plan_agent.py`)
-- Generates plans with real chapter structure from ChromaDB (`_extract_chapter_structure`), reading time estimates (300 chars/min), progress tracking
-- Supports `new` / `edit` / `extend` actions backed by `PlanStorage`
-- Has a single shared `_retriever` instance
-- **Key behavior:** if `book_source` is specified but `book_in_library=False`, retrieval is skipped entirely (returns empty docs) to avoid BM25 cache pollution. Plan is generated from LLM knowledge with a note appended explaining the limitation.
+**PlanEditor** (`backend/agents/plan_editor.py`)
+- Two paths: `generate()` (non-ReAct, triggered by REST API when user opens a book) and `run()` (ReAct agent, triggered by chat for edit/extend)
+- `generate()` extracts all chapter structure from ChromaDB via `get_all_documents()` (paginated), calls LLM only for the schedule section, writes plan to disk and registers in `PlanCatalog`
+- `run()` builds a LangGraph ReAct agent with `load_existing_plan` and `get_chapter_structure` tools; reads/writes via `PlanCatalog` for file lookup
+- Files are named by `book_id` (uuid5), stored under `PLAN_STORAGE_DIR`
 
 ### Persistent Storage
 
-`backend/storage/` provides pluggable file-backed storage:
+Two-layer approach: SQLite tracks metadata, file system holds content.
 
-- `NoteStorage` / `LocalNoteStorage` — saves/loads/lists/deletes Markdown note files under `NOTE_STORAGE_DIR`
-- `PlanStorage` / `LocalPlanStorage` — same pattern for reading plans under `PLAN_STORAGE_DIR`
+**SQLite catalog** (`backend/storage/book_catalog.py`, shared DB at `data/books.db`):
+- `BookCatalog` — books table: `book_id`, `title`, `author`, `source`, `total_chunks`, `added_at`, `cover_path`, `status`, `progress`
+- `NoteCatalog` — notes table: `note_id`, `book_id`, `file_path`, `created_at`, `updated_at`
+- `PlanCatalog` — plans table: `plan_id`, `book_id`, `file_path`, `reading_goal`, `created_at`, `updated_at`
+- All three share one DB file and a common `_DB` base class that runs full DDL on init
+- `book_id_from_source(source)` — deterministic `uuid5(NAMESPACE_URL, source)`; same formula used by `ChromaStore.ingest()`, so IDs are consistent without a DB lookup
+- Factory functions: `get_book_catalog()`, `get_note_catalog()`, `get_plan_catalog()`
+
+**File-backed storage** (`backend/storage/`):
+- `NoteStorage` / `LocalNoteStorage` — saves/loads/lists/deletes Markdown note files under `NOTE_STORAGE_DIR`; files named `{book_id}.md`
+- `PlanStorage` / `LocalPlanStorage` — same pattern for reading plans under `PLAN_STORAGE_DIR`; files named `{book_id}.md`
 - Both implement a `Protocol` (runtime-checkable) for easy substitution
 - `NoteOutputMeta` / `PlanOutputMeta` TypedDicts stored in `GraphState` as serializable pointers to the last saved file
 
@@ -164,7 +176,7 @@ The SQLite checkpoint has two tables: `checkpoints` (full state snapshots) and `
 - `CHROMA_API_KEY` empty → `chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)` (local)
 - `CHROMA_API_KEY` set → `chromadb.CloudClient(...)` (Chroma Cloud)
 
-**Chroma Cloud quota:** Free tier has a 300-record-per-request limit on `Get` operations. `_ingest_chunks_to_db` batches dedup checks in slices of `embed_batch_size` (default 100) to stay within this limit.
+**Chroma Cloud quota:** Free tier has a 300-record-per-request limit on `Get` operations. `_ingest_chunks_to_db` batches dedup checks in slices of `embed_batch_size` (default 100); `get_all_documents()` uses a paginated while-loop (limit+offset) to fetch beyond 300 records.
 
 ### LLM Client
 
@@ -180,11 +192,28 @@ The SQLite checkpoint has two tables: `checkpoints` (full state snapshots) and `
 - `active_tab` bypasses LLM intent classification and routes directly to the named agent
 - `selected_text` / `current_chapter` inject reader context into the query
 
+**GET /books**
+- Returns all books from `BookCatalog` SQLite, including `book_id`, `status`, `progress`, `cover_path`
+
 **POST /books/upload**
 - Multipart file upload (`.epub` only)
-- Saves file to `BOOKS_DATA_DIR`, runs full ingest pipeline
+- Saves file to `BOOKS_DATA_DIR`, runs full ingest pipeline, writes to `BookCatalog`, extracts cover to `COVERS_DIR`
 - On success, calls `invalidate_bm25_caches()` to clear stale BM25 indices in all agents
-- Response: `{source, collection_name, total_chunks, added, skipped}`
+- Response: `{book_id, source, collection_name, total_chunks, added, skipped}`
+
+**POST /reader/{book_id}/init**
+- Auto-generates a reading plan when user opens a book (idempotent)
+- Looks up book in `BookCatalog`, calls `PlanEditor.generate()`, updates status to `"reading"`
+
+**GET /reader/{book_id}/plan**
+- Returns current plan markdown; looks up file path via `PlanCatalog`
+
+**POST /reader/{book_id}/progress**
+- Marks a chapter as complete (`- [ ]` → `- [x]`) in the plan file
+- Recomputes `progress` fraction and syncs to `BookCatalog` + `PlanCatalog.touch()`
+
+**GET /notes/books**, **POST /notes/append**, etc.
+- Notes endpoints use `book_id` for all lookups; resolve to title via `BookCatalog` internally
 
 ## Test Fixtures
 

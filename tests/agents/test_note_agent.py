@@ -1,112 +1,101 @@
-"""Tests for NoteAgent — no real API calls, no real ChromaStore."""
+"""Tests for NoteAgent — process_qa hook only."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock
 
-import pytest
-from langchain_core.documents import Document
+from backend.agents.note_agent import NoteAgent, NoteEntry
 
-from backend.agents.note_agent import NoteAgent, NoteResult, notes_node
-from backend.xai.citation import Citation
-
-
-def _make_doc(text: str, source: str = "sample.pdf", title: str = "Test Book", page: str = "1") -> Document:
-    return Document(
-        page_content=text,
-        metadata={"source": source, "book_title": title, "section_indices": page},
-    )
-
-
-@pytest.fixture
-def mock_store():
-    docs = [
-        _make_doc("第一章讲述了纯粹理性批判的基本概念。"),
-        _make_doc("先验感性论探讨了时间和空间的本质。"),
-    ]
-    store = MagicMock()
-    store.collection_name = "test_collection"
-    store.similarity_search.return_value = docs
-    store.similarity_search_with_score.return_value = [(d, 0.9) for d in docs]
-    store.get_all_documents.return_value = docs
-    return store
+_FAKE_QUESTION = "先验感性论中时间和空间为什么是直观形式？"
+_FAKE_ANSWER = "时间和空间是主体感知世界的先天框架，不依赖经验，与牛顿绝对时空观根本不同。"
+_EXTRACTED = {
+    "question_summary": "时空为何是直观形式",
+    "answer_keypoints": ["先天框架", "不依赖经验"],
+    "followup_questions": ["物自体为何不可知？"],
+    "concepts": ["先验感性论", "时间", "空间"],
+}
 
 
-@pytest.fixture
-def mock_llm():
+def _make_llm(extracted: dict = _EXTRACTED) -> MagicMock:
     llm = MagicMock()
-    llm.invoke.return_value = MagicMock(content="## 笔记\n\n- 要点1\n- 要点2")
+    llm.invoke.return_value = MagicMock(
+        content=json.dumps(extracted, ensure_ascii=False)
+    )
     return llm
 
 
-class TestNoteAgentRAGPath:
-    def test_run_with_book_source_returns_result(self, mock_store, mock_llm):
-        agent = NoteAgent(store=mock_store, llm=mock_llm)
-        result = agent.run(query="整理第一章的笔记", book_source="sample.pdf")
+class TestProcessQA:
+    def test_returns_note_entry(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=_make_llm())
+            entry = agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "纯粹理性批判")
 
-        assert isinstance(result, NoteResult)
-        assert "笔记" in result.answer
-        assert len(result.citations) == 2
-        assert len(result.retrieved_docs) == 2
+        assert isinstance(entry, NoteEntry)
+        assert entry.book_title == "纯粹理性批判"
+        assert entry.question_summary == "时空为何是直观形式"
+        assert "先验感性论" in entry.concepts
 
-    def test_run_without_book_source_searches_all(self, mock_store, mock_llm):
-        agent = NoteAgent(store=mock_store, llm=mock_llm)
-        result = agent.run(query="整理读书笔记")
+    def test_writes_markdown_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=_make_llm())
+            agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "纯粹理性批判")
 
-        assert isinstance(result, NoteResult)
-        assert len(result.retrieved_docs) == 2
+            md_files = list(Path(d).glob("*.md"))
+            assert len(md_files) == 1
+            content = md_files[0].read_text(encoding="utf-8")
+            assert "时空为何是直观形式" in content
+            assert "先天框架" in content
+            assert "物自体为何不可知" in content
 
-    def test_run_empty_docs_returns_fallback(self, mock_llm):
-        store = MagicMock()
-        store.collection_name = "test_collection"
-        store.similarity_search.return_value = []
-        store.similarity_search_with_score.return_value = []
-        store.get_all_documents.return_value = []
-        agent = NoteAgent(store=store, llm=mock_llm)
+    def test_returns_none_when_no_book_title(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=_make_llm())
+            result = agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "")
+        assert result is None
 
-        result = agent.run(query="整理笔记", book_source="nonexistent.pdf")
+    def test_returns_none_on_llm_failure(self):
+        llm = MagicMock()
+        llm.invoke.side_effect = RuntimeError("LLM error")
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=llm)
+            result = agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "康德")
+        assert result is None
 
-        assert isinstance(result, NoteResult)
-        assert "没有检索到" in result.answer
-        assert result.citations == []
-        assert result.retrieved_docs == []
+    def test_multiple_qa_append_to_same_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=_make_llm())
+            agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "纯粹理性批判")
+            agent.process_qa("另一个问题", "另一个答案", "纯粹理性批判")
+            assert len(list(Path(d).glob("*.md"))) == 1
 
+    def test_different_books_create_separate_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=_make_llm())
+            agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "纯粹理性批判")
+            agent.process_qa("什么是权力意志？", "权力意志是...", "精神现象学")
+            assert len(list(Path(d).glob("*.md"))) == 2
 
-class TestNoteAgentRawTextPath:
-    def test_run_with_raw_text_skips_rag(self, mock_llm):
-        store = MagicMock()
-        store.collection_name = "test_collection"
-        store.get_all_documents.return_value = []
-        store.similarity_search_with_score.return_value = []
-        agent = NoteAgent(store=store, llm=mock_llm)
+    def test_calls_vector_store_when_provided(self):
+        mock_vs = MagicMock()
+        mock_vs.search_similar.return_value = []
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=_make_llm(), note_vector_store=mock_vs)
+            agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "纯粹理性批判")
+        mock_vs.add_entry.assert_called_once()
+        mock_vs.search_similar.assert_called_once()
 
-        result = agent.run(query="帮我整理", raw_text="这是一段需要整理的文字内容。")
-
-        assert isinstance(result, NoteResult)
-        assert result.citations == []
-        assert result.retrieved_docs == []
-        # HybridRetriever should NOT be called because raw_text only (no book_source)
-        store.similarity_search_with_score.assert_not_called()
-
-
-class TestNotesNode:
-    def test_notes_node_reads_state_fields(self, mock_store, mock_llm):
-        agent = NoteAgent(store=mock_store, llm=mock_llm)
-        state = {
-            "notes_query": "整理笔记",
-            "notes_book_source": "sample.pdf",
-        }
-
-        patch_dict = notes_node(state, agent=agent)
-
-        assert "answer" in patch_dict
-        assert "citations" in patch_dict
-        assert "retrieved_docs_count" in patch_dict
-        assert isinstance(patch_dict["retrieved_docs_count"], int)
-
-    def test_notes_node_falls_back_to_user_input(self, mock_store, mock_llm):
-        agent = NoteAgent(store=mock_store, llm=mock_llm)
-        state = {"user_input": "请帮我整理笔记"}
-
-        patch_dict = notes_node(state, agent=agent)
-
-        assert "answer" in patch_dict
+    def test_cross_book_ref_appears_in_file(self):
+        mock_vs = MagicMock()
+        mock_vs.search_similar.return_value = [{
+            "book_title": "精神现象学",
+            "question_summary": "主体性与客体性",
+            "date": "2026-03-10",
+        }]
+        with tempfile.TemporaryDirectory() as d:
+            agent = NoteAgent(notes_dir=Path(d), llm=_make_llm(), note_vector_store=mock_vs)
+            agent.process_qa(_FAKE_QUESTION, _FAKE_ANSWER, "纯粹理性批判")
+            content = list(Path(d).glob("*.md"))[0].read_text(encoding="utf-8")
+        assert "精神现象学" in content
+        assert "💡 关联" in content

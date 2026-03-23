@@ -26,6 +26,8 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 from langchain_core.documents import Document
 
+import uuid as _uuid
+
 from backend.rag.chroma.chroma_store import (
     ChromaStore,
     IngestConfig,
@@ -535,3 +537,97 @@ class TestResolveDb:
         monkeypatch.setattr("backend.rag.chroma.chroma_store.Chroma", fake_chroma)
         resolved = store._resolve_db("other_col")
         assert resolved is new_db
+
+
+# ---------------------------------------------------------------------------
+# book_id — uuid5 生成、存储、查找
+# ---------------------------------------------------------------------------
+
+def _mock_pipeline(monkeypatch, epub_path, mock_chunks):
+    """在 ingest() 中 mock EpubExtractor / TextCleaner / TextChunker。"""
+    mock_content = MagicMock(sections=[])
+    mock_content.metadata = {"title": "Test Book", "author": "Test Author"}
+    monkeypatch.setattr(
+        "backend.rag.chroma.chroma_store.EpubExtractor",
+        lambda path: MagicMock(extract=lambda: mock_content),
+    )
+    monkeypatch.setattr(
+        "backend.rag.chroma.chroma_store.TextCleaner",
+        lambda cfg: MagicMock(clean_content=lambda c: MagicMock(sections=[])),
+    )
+    monkeypatch.setattr(
+        "backend.rag.chroma.chroma_store.TextChunker",
+        lambda cfg: MagicMock(chunk_content=lambda c: mock_chunks),
+    )
+
+
+class TestBookId:
+
+    def test_chunk_to_document_includes_book_id(self):
+        chunk = make_chunk()
+        doc = ChromaStore._chunk_to_document(chunk, book_id="test-uuid-123")
+        assert doc.metadata["book_id"] == "test-uuid-123"
+
+    def test_chunk_to_document_default_book_id_empty(self):
+        chunk = make_chunk()
+        doc = ChromaStore._chunk_to_document(chunk)
+        assert "book_id" in doc.metadata
+        assert doc.metadata["book_id"] == ""
+
+    def test_ingest_returns_correct_book_id(self, store, tmp_path, monkeypatch):
+        mock_chunks = [make_chunk("content", chunk_index=0)]
+        epub_path = tmp_path / "fake.epub"
+        epub_path.write_bytes(b"fake epub content")
+        _mock_pipeline(monkeypatch, epub_path, mock_chunks)
+
+        result = store.ingest(epub_path)
+        expected_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, str(epub_path)))
+        assert result.book_id == expected_id
+
+    def test_ingest_same_file_produces_same_book_id(self, store, tmp_path, monkeypatch):
+        mock_chunks = [make_chunk("content", chunk_index=0)]
+        epub_path = tmp_path / "fake.epub"
+        epub_path.write_bytes(b"fake epub content")
+        _mock_pipeline(monkeypatch, epub_path, mock_chunks)
+
+        r1 = store.ingest(epub_path)
+        r2 = store.ingest(epub_path)
+        expected_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, str(epub_path)))
+        assert r1.book_id == expected_id
+        assert r2.book_id == expected_id
+
+    def test_ingest_chunks_returns_book_id(self, store, sample_chunks):
+        source = sample_chunks[0].metadata.source
+        result = store.ingest_chunks(sample_chunks)
+        expected_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, source))
+        assert result.book_id == expected_id
+
+    def test_list_book_titles_includes_book_id(self, store, mock_collection):
+        def _get(**kwargs):
+            if "where" in kwargs:
+                return {"metadatas": [{"book_title": "Test Book", "author": "T", "source": "kant.epub", "book_id": "uuid-1"}]}
+            return {"metadatas": [{"source": "kant.epub"}]}
+        mock_collection.get.side_effect = _get
+        books = store.list_book_titles()
+        assert len(books) == 1
+        assert books[0]["book_id"] == "uuid-1"
+
+    def test_resolve_book_by_id_returns_entry(self, store, mock_collection):
+        def _get(**kwargs):
+            if "where" in kwargs:
+                return {"metadatas": [{"book_title": "Test Book", "author": "T", "source": "kant.epub", "book_id": "uuid-1"}]}
+            return {"metadatas": [{"source": "kant.epub"}]}
+        mock_collection.get.side_effect = _get
+        entry = store.resolve_book_by_id("uuid-1")
+        assert entry is not None
+        assert entry["book_id"] == "uuid-1"
+        assert entry["book_title"] == "Test Book"
+
+    def test_resolve_book_by_id_returns_none_for_unknown(self, store, mock_collection):
+        def _get(**kwargs):
+            if "where" in kwargs:
+                return {"metadatas": [{"book_title": "Test Book", "author": "T", "source": "kant.epub", "book_id": "uuid-1"}]}
+            return {"metadatas": [{"source": "kant.epub"}]}
+        mock_collection.get.side_effect = _get
+        result = store.resolve_book_by_id("unknown-uuid-999")
+        assert result is None
