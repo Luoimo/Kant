@@ -443,6 +443,7 @@ class TestIngest:
 
         mock_book_content = MagicMock()
         mock_book_content.sections = [MagicMock()]
+        mock_book_content.metadata = {"title": "Test Book", "author": "Test Author"}
 
         mock_cleaned = MagicMock()
         mock_cleaned.sections = [MagicMock()]
@@ -485,9 +486,11 @@ class TestIngest:
 
     def test_returns_ingest_result(self, store, tmp_path, monkeypatch):
         mock_chunks = [make_chunk("content", chunk_index=0)]
+        mock_content = MagicMock(sections=[])
+        mock_content.metadata = {"title": "Test Book", "author": "Test Author"}
         monkeypatch.setattr(
             "backend.rag.chroma.chroma_store.EpubExtractor",
-            lambda path: MagicMock(extract=lambda: MagicMock(sections=[])),
+            lambda path: MagicMock(extract=lambda: mock_content),
         )
         monkeypatch.setattr(
             "backend.rag.chroma.chroma_store.TextCleaner",

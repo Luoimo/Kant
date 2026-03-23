@@ -92,6 +92,18 @@ class Chroma:
 
     # --- 写入 ---
 
+    def upsert_documents(self, documents: list[Document], ids: list[str]) -> None:
+        """向量化并 upsert（存在则更新，不存在则插入），用于 book_catalog 条目维护。"""
+        texts = [doc.page_content for doc in documents]
+        metadatas = [doc.metadata for doc in documents]
+        embeddings = self._embedding_function.embed_documents(texts)
+        self._collection.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=texts,
+            metadatas=metadatas,
+        )
+
     def add_documents(self, documents: list[Document], ids: list[str]) -> None:
         """嵌入文本并批量写入 chromadb collection。"""
         texts = [doc.page_content for doc in documents]
@@ -240,14 +252,14 @@ class ChromaStore:
 
     def __init__(
         self,
-        collection_name: str = "kant_docs",
+        collection_name: str | None = None,
         persist_directory: str | None = None,
         chunk_config: ChunkConfig | None = None,
         clean_config: CleanConfig | None = None,
         ingest_config: IngestConfig | None = None,
     ) -> None:
         settings = get_settings()
-        self.collection_name = collection_name
+        self.collection_name = collection_name or settings.books_collection_name
         self.persist_directory = persist_directory or str(
             Path(settings.chroma_persist_dir).resolve()
         )
@@ -294,15 +306,15 @@ class ChromaStore:
         chunks = chunker.chunk_content(cleaned)
         logger.debug("  ✓ 切块完成，共 %d 个 chunk", len(chunks))
 
-        # 未指定 collection 时，自动以书名作为 collection 名称
+        # 未指定 collection 时，使用 ChromaStore 默认 collection（所有书共享一个库）
         if collection_name is None:
-            raw_title = book_content.metadata.get("title") or path.stem
-            collection_name = _sanitize_collection_name(raw_title)
-            logger.info("  → collection：%s", collection_name)
+            collection_name = self.collection_name
+        logger.info("  → collection：%s", collection_name)
 
         db = self._resolve_db(collection_name)
         result = self._ingest_chunks_to_db(chunks, db, source=str(path))
         logger.info("  ✓ 入库完成：%s", result)
+
         return result
 
     def ingest_chunks(
@@ -423,7 +435,7 @@ class ChromaStore:
         ]
 
     def list_sources(self) -> list[str]:
-        """列出当前 collection 中所有已入库的 PDF 来源路径（去重）。"""
+        """列出当前 collection 中所有已入库的文件来源路径（去重）。"""
         collection = self._db._collection
         results = collection.get(include=["metadatas"])
         sources = {
@@ -432,6 +444,34 @@ class ChromaStore:
             if meta
         }
         return sorted(sources - {""})
+
+    def list_book_titles(self) -> list[dict[str, str]]:
+        """
+        返回库中所有书的 {book_title, author, source} 列表（去重）。
+
+        每本书从主 collection 中取一条 metadata 即可，不需要向量查询。
+        用于 RecommendationAgent 标注推荐结果是否已在库中。
+        """
+        sources = self.list_sources()
+        books: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for src in sources:
+            try:
+                results = self._db._collection.get(
+                    where={"source": src},
+                    include=["metadatas"],
+                    limit=1,
+                )
+                metas = results.get("metadatas") or []
+                if metas:
+                    title = metas[0].get("book_title", "")
+                    author = metas[0].get("author", "")
+                    if title and title not in seen:
+                        seen.add(title)
+                        books.append({"book_title": title, "author": author, "source": src})
+            except Exception as exc:
+                logger.warning("list_book_titles：跳过 source=%s，原因：%s", src, exc)
+        return books
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -473,9 +513,23 @@ class ChromaStore:
         cfg = self.ingest_config
         total = len(chunks)
 
-        # 去重：collection 已有数据则整本跳过（每本书独立 collection，无需逐条比对）
-        if cfg.skip_existing and db._collection.count() > 0:
-            logger.info("  → collection 已存在数据，跳过入库")
+        # 去重：按 chunk_id 逐条比对，只写入新增 chunk（支持书籍增量更新）
+        # 分批查询以避免 Chroma Cloud 单次 Get 请求的记录数限制（免费套餐 ≤300 条/次）
+        if cfg.skip_existing and total > 0:
+            all_ids = [c.chunk_id for c in chunks]
+            existing_ids: set[str] = set()
+            for i in range(0, len(all_ids), cfg.embed_batch_size):
+                batch_ids = all_ids[i: i + cfg.embed_batch_size]
+                result = db._collection.get(ids=batch_ids, include=[])
+                existing_ids.update(result.get("ids") or [])
+            chunks = [c for c in chunks if c.chunk_id not in existing_ids]
+            skipped = total - len(chunks)
+            if skipped:
+                logger.info("  → 跳过已有 chunk：%d 条", skipped)
+        else:
+            skipped = 0
+
+        if not chunks:
             return IngestResult(
                 source=source,
                 total_chunks=total,
@@ -498,7 +552,7 @@ class ChromaStore:
             source=source,
             total_chunks=total,
             added=added,
-            skipped=0,
+            skipped=skipped,
             collection_name=db._collection.name,
         )
 

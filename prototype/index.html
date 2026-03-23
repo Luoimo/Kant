@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kant · 读书 AI 助手</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sidebar-w: 220px;
+  --bg: #f7f4ef;
+  --bg-card: #ffffff;
+  --sidebar-bg: #18192b;
+  --sidebar-hover: #23253d;
+  --sidebar-active: #2e3054;
+  --accent: #c47c3e;
+  --accent-light: #faebd7;
+  --accent-dim: rgba(196,124,62,0.15);
+  --blue: #4a7bbf;
+  --green: #3a9a6e;
+  --text: #1a1a2e;
+  --text-muted: #7a7a9a;
+  --border: #e4ddd2;
+  --shadow: 0 4px 24px rgba(26,26,46,0.08);
+  --radius: 14px;
+  --font-ui: 'Inter', -apple-system, sans-serif;
+  --font-serif: 'Noto Serif SC', Georgia, serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-ui); background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-w); background: var(--sidebar-bg); display: flex;
+  flex-direction: column; flex-shrink: 0; z-index: 10;
+}
+.sidebar-logo {
+  padding: 28px 20px 24px; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.sidebar-logo .logo-name {
+  font-family: var(--font-serif); font-size: 22px; color: #f0ebe0;
+  font-weight: 700; letter-spacing: 1px;
+}
+.sidebar-logo .logo-sub {
+  font-size: 11px; color: rgba(240,235,224,0.45); margin-top: 3px; letter-spacing: 0.5px;
+}
+.sidebar-nav { padding: 16px 12px; flex: 1; }
+.nav-section-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px;
+  color: rgba(255,255,255,0.25); padding: 0 8px; margin-bottom: 8px; margin-top: 16px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border-radius: 9px; cursor: pointer; color: rgba(240,235,224,0.6);
+  font-size: 13.5px; font-weight: 400; transition: all 0.15s; user-select: none;
+}
+.nav-item:hover { background: var(--sidebar-hover); color: #f0ebe0; }
+.nav-item.active { background: var(--sidebar-active); color: #f0ebe0; font-weight: 500; }
+.nav-item .icon { font-size: 16px; width: 20px; text-align: center; }
+.nav-badge {
+  margin-left: auto; background: var(--accent); color: white;
+  font-size: 10px; padding: 2px 7px; border-radius: 99px; font-weight: 600;
+}
+.sidebar-stats {
+  padding: 16px 12px 20px; border-top: 1px solid rgba(255,255,255,0.06);
+}
+.stats-row { display: flex; gap: 8px; }
+.stat-item {
+  flex: 1; background: rgba(255,255,255,0.05); border-radius: 10px;
+  padding: 10px 8px; text-align: center;
+}
+.stat-num { font-size: 18px; font-weight: 600; color: #f0ebe0; }
+.stat-label { font-size: 10px; color: rgba(255,255,255,0.3); margin-top: 2px; }
+.upload-btn {
+  margin: 12px; padding: 10px; background: var(--accent); border: none;
+  border-radius: 10px; color: white; font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: opacity 0.15s; display: flex; align-items: center;
+  justify-content: center; gap: 6px;
+}
+.upload-btn:hover { opacity: 0.88; }
+
+/* ── Main ── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.topbar {
+  padding: 20px 28px 0; display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+}
+.page-title { font-size: 22px; font-weight: 600; color: var(--text); }
+.search-box {
+  margin-left: auto; display: flex; align-items: center; gap: 8px;
+  background: white; border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 14px; min-width: 220px;
+}
+.search-box input {
+  border: none; outline: none; font-size: 13px; color: var(--text);
+  background: transparent; width: 100%; font-family: var(--font-ui);
+}
+.search-box .search-icon { color: var(--text-muted); font-size: 14px; }
+.content { flex: 1; overflow-y: auto; padding: 20px 28px 28px; }
+
+/* ── Screen switching ── */
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* ── Library ── */
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px; margin-top: 8px;
+}
+.section-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.section-link { font-size: 13px; color: var(--accent); cursor: pointer; text-decoration: none; }
+
+/* Currently reading - hero card */
+.hero-reading {
+  background: var(--bg-card); border-radius: var(--radius); padding: 20px 24px;
+  display: flex; align-items: center; gap: 24px; box-shadow: var(--shadow);
+  margin-bottom: 28px; border: 1px solid var(--border);
+}
+.hero-cover {
+  width: 80px; height: 110px; border-radius: 6px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-serif); font-size: 11px; color: rgba(255,255,255,0.9);
+  text-align: center; padding: 8px; font-weight: 600; box-shadow: 3px 3px 12px rgba(0,0,0,0.25);
+}
+.hero-info { flex: 1; }
+.hero-tag {
+  display: inline-block; font-size: 10px; background: var(--accent-dim);
+  color: var(--accent); padding: 3px 9px; border-radius: 99px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.hero-title { font-family: var(--font-serif); font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.hero-author { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+.progress-bar-wrap { background: var(--border); border-radius: 99px; height: 5px; margin-bottom: 6px; }
+.progress-bar-fill { background: var(--accent); border-radius: 99px; height: 100%; transition: width 0.5s; }
+.progress-text { font-size: 12px; color: var(--text-muted); }
+.hero-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.btn-primary {
+  background: var(--accent); color: white; border: none; border-radius: 9px;
+  padding: 10px 20px; font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: opacity 0.15s; text-decoration: none; white-space: nowrap;
+}
+.btn-primary:hover { opacity: 0.88; }
+.btn-ghost {
+  background: none; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 9px; padding: 9px 16px; font-size: 12px; cursor: pointer;
+  transition: all 0.15s; white-space: nowrap;
+}
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Book grid */
+.book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 18px; }
+.book-card {
+  background: var(--bg-card); border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow); border: 1px solid var(--border);
+  cursor: pointer; transition: transform 0.18s, box-shadow 0.18s;
+}
+.book-card:hover { transform: translateY(-4px); box-shadow: 0 8px 32px rgba(26,26,46,0.14); }
+.book-cover {
+  height: 150px; display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-serif); font-size: 12px; color: rgba(255,255,255,0.9);
+  text-align: center; padding: 12px; font-weight: 600; position: relative;
+}
+.book-cover .cover-progress {
+  position: absolute; bottom: 8px; right: 8px;
+  width: 32px; height: 32px;
+}
+.book-cover .cover-progress circle { fill: none; stroke-width: 3; transform: rotate(-90deg); transform-origin: 50% 50%; }
+.book-cover .cover-progress .bg { stroke: rgba(255,255,255,0.25); }
+.book-cover .cover-progress .fill { stroke: rgba(255,255,255,0.9); stroke-linecap: round; transition: stroke-dashoffset 0.5s; }
+.book-card-body { padding: 12px; }
+.book-card-title { font-family: var(--font-serif); font-size: 13px; font-weight: 600; margin-bottom: 3px; line-height: 1.4; }
+.book-card-author { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+.book-card-footer { display: flex; align-items: center; justify-content: space-between; }
+.book-card-pct { font-size: 11px; font-weight: 600; color: var(--accent); }
+.book-card-date { font-size: 10px; color: var(--text-muted); }
+.book-completed .book-card-pct { color: var(--green); }
+.book-new .book-card-pct { color: var(--text-muted); }
+
+/* ── Chat Screen ── */
+.chat-layout { display: flex; flex-direction: column; height: calc(100vh - 88px); }
+.memory-banner {
+  background: linear-gradient(135deg, #fdf6ec, #faebd7);
+  border: 1px solid #f0d5b0; border-radius: var(--radius);
+  padding: 12px 16px; display: flex; align-items: flex-start; gap: 10px;
+  margin-bottom: 16px; flex-shrink: 0;
+}
+.memory-banner .mem-icon { font-size: 18px; }
+.memory-banner .mem-text { font-size: 12.5px; color: #7a5a30; line-height: 1.5; }
+.memory-banner .mem-text strong { color: var(--accent); }
+.chat-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding-bottom: 8px; }
+.chat-msg { display: flex; gap: 10px; align-items: flex-start; max-width: 85%; }
+.chat-msg.user { align-self: flex-end; flex-direction: row-reverse; }
+.chat-avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 15px;
+}
+.chat-avatar.ai-av { background: linear-gradient(135deg, var(--accent), #e8a060); color: white; font-size: 14px; }
+.chat-avatar.user-av { background: var(--sidebar-bg); color: #f0ebe0; font-size: 13px; }
+.chat-bubble {
+  padding: 11px 15px; border-radius: 14px; font-size: 13.5px; line-height: 1.65;
+  max-width: 500px;
+}
+.chat-msg.ai .chat-bubble {
+  background: white; border: 1px solid var(--border); border-top-left-radius: 4px; color: var(--text);
+}
+.chat-msg.user .chat-bubble {
+  background: var(--sidebar-bg); color: #f0ebe0; border-bottom-right-radius: 4px;
+}
+.chat-bubble strong { color: var(--accent); }
+.chat-bubble .cite {
+  display: inline-block; background: var(--accent-dim); color: var(--accent);
+  font-size: 11px; padding: 1px 6px; border-radius: 4px; cursor: pointer;
+  font-weight: 500; margin: 0 1px;
+}
+.chat-suggestions {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; flex-shrink: 0;
+}
+.suggestion-chip {
+  background: white; border: 1px solid var(--border); border-radius: 99px;
+  padding: 7px 14px; font-size: 12.5px; color: var(--text-muted); cursor: pointer;
+  transition: all 0.15s;
+}
+.suggestion-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.chat-input-wrap {
+  display: flex; gap: 10px; align-items: center; padding: 14px;
+  background: white; border: 1px solid var(--border); border-radius: var(--radius);
+  flex-shrink: 0;
+}
+.chat-input {
+  flex: 1; border: none; outline: none; font-size: 13.5px; font-family: var(--font-ui);
+  color: var(--text); background: transparent; resize: none; max-height: 80px;
+}
+.chat-input::placeholder { color: var(--text-muted); }
+.send-btn {
+  background: var(--accent); border: none; width: 36px; height: 36px;
+  border-radius: 9px; color: white; font-size: 16px; cursor: pointer;
+  transition: opacity 0.15s; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.send-btn:hover { opacity: 0.85; }
+.typing-indicator {
+  display: flex; gap: 4px; align-items: center; padding: 4px 0;
+}
+.typing-dot {
+  width: 6px; height: 6px; background: var(--text-muted); border-radius: 50%;
+  animation: bounce 1.2s infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes bounce { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-6px); } }
+.fade-in { animation: fadeIn 0.25s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+
+<!-- ══ SIDEBAR ══ -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-name">Kant</div>
+    <div class="logo-sub">读书 AI 助手</div>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-section-label">主菜单</div>
+    <div class="nav-item active" onclick="showScreen('library', this)">
+      <span class="icon">📚</span> 我的书库
+    </div>
+    <div class="nav-item" onclick="showScreen('chat', this)">
+      <span class="icon">💬</span> AI 对话
+      <span class="nav-badge">3</span>
+    </div>
+    <div class="nav-section-label">工具</div>
+    <div class="nav-item" onclick="showScreen('notes', this)">
+      <span class="icon">📝</span> 我的笔记
+    </div>
+    <div class="nav-item" onclick="showScreen('plans', this)">
+      <span class="icon">📅</span> 阅读计划
+    </div>
+    <div class="nav-item">
+      <span class="icon">⭐</span> 书摘精华
+    </div>
+    <div class="nav-section-label">其他</div>
+    <div class="nav-item">
+      <span class="icon">⚙️</span> 设置
+    </div>
+  </div>
+  <div class="sidebar-stats">
+    <div class="stats-row">
+      <div class="stat-item">
+        <div class="stat-num">6</div>
+        <div class="stat-label">书库</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">12</div>
+        <div class="stat-label">天连续</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">3</div>
+        <div class="stat-label">本月完成</div>
+      </div>
+    </div>
+  </div>
+  <button class="upload-btn" onclick="alert('上传 EPUB → POST /books/upload')">
+    ＋ 上传书籍
+  </button>
+</nav>
+
+<!-- ══ MAIN ══ -->
+<div class="main">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="page-title" id="page-title">我的书库</div>
+    <div class="search-box">
+      <span class="search-icon">🔍</span>
+      <input type="text" placeholder="搜索书名、作者、笔记…">
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ── Library Screen ── -->
+    <div class="screen active" id="screen-library">
+
+      <!-- Currently reading hero -->
+      <div class="section-header">
+        <div class="section-title">继续阅读</div>
+        <a class="section-link" href="reader.html">打开精读模式 →</a>
+      </div>
+      <div class="hero-reading">
+        <div class="hero-cover" style="background: linear-gradient(145deg,#8B1A1A,#2D0A0A);">
+          存在<br>与虚无
+        </div>
+        <div class="hero-info">
+          <div class="hero-tag">进行中</div>
+          <div class="hero-title">存在与虚无</div>
+          <div class="hero-author">让-保罗·萨特 / 哲学 · 存在主义</div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar-fill" style="width:78%"></div>
+          </div>
+          <div class="progress-text">第四部分 · 第二章 · 78% · 上次阅读 2小时前</div>
+        </div>
+        <div class="hero-actions">
+          <a href="reader.html" class="btn-primary">继续精读</a>
+          <button class="btn-ghost">查看笔记</button>
+        </div>
+      </div>
+
+      <!-- Book grid -->
+      <div class="section-header">
+        <div class="section-title">全部书籍 <span style="color:var(--text-muted);font-weight:400;font-size:13px;">（6本）</span></div>
+        <span class="section-link">排序方式 ▾</span>
+      </div>
+      <div class="book-grid" id="book-grid"></div>
+    </div>
+
+    <!-- ── Chat Screen ── -->
+    <div class="screen" id="screen-chat">
+      <div class="chat-layout">
+        <div class="memory-banner">
+          <span class="mem-icon">🧠</span>
+          <div class="mem-text">
+            <strong>记忆已激活</strong>：您最近在读《存在与虚无》（78%）和《纯粹理性批判》（23%）。
+            上次对话探讨了萨特与海德格尔在「此在」概念上的分歧。AI 将结合您的阅读历史给出更准确的回答。
+          </div>
+        </div>
+
+        <div class="chat-suggestions">
+          <div class="suggestion-chip" onclick="sendSuggestion(this)">萨特和康德对自由的理解有何根本差异？</div>
+          <div class="suggestion-chip" onclick="sendSuggestion(this)">我读完《存在与虚无》后应该读什么？</div>
+          <div class="suggestion-chip" onclick="sendSuggestion(this)">帮我整理一下最近的阅读笔记</div>
+          <div class="suggestion-chip" onclick="sendSuggestion(this)">制定下个月的哲学阅读计划</div>
+        </div>
+
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-msg ai fade-in">
+            <div class="chat-avatar ai-av">K</div>
+            <div class="chat-bubble">
+              你好！我已读取你的阅读历史。你正在同时阅读萨特和康德，
+              这两位思想家对「自由」的理解截然不同——正是哲学史上最有张力的对话之一。<br><br>
+              今天想深入哪个方向？
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-wrap">
+          <textarea class="chat-input" id="chat-input" rows="1"
+            placeholder="问任何关于你读过的书的问题…"
+            onkeydown="handleChatKey(event)"></textarea>
+          <button class="send-btn" onclick="sendMessage()">↑</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Notes placeholder ── -->
+    <div class="screen" id="screen-notes">
+      <div style="padding:60px 0;text-align:center;color:var(--text-muted);">
+        <div style="font-size:48px;margin-bottom:16px;">📝</div>
+        <div style="font-size:18px;font-weight:600;color:var(--text);margin-bottom:8px;">我的笔记</div>
+        <div style="font-size:14px;">AI 生成的结构化笔记将在精读模式中自动保存</div>
+        <div style="margin-top:24px;">
+          <a href="reader.html" class="btn-primary" style="display:inline-block;">打开精读模式</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Plans placeholder ── -->
+    <div class="screen" id="screen-plans">
+      <div style="padding:60px 0;text-align:center;color:var(--text-muted);">
+        <div style="font-size:48px;margin-bottom:16px;">📅</div>
+        <div style="font-size:18px;font-weight:600;color:var(--text);margin-bottom:8px;">阅读计划</div>
+        <div style="font-size:14px;">在精读模式中让 AI 帮你制定个性化阅读计划</div>
+        <div style="margin-top:24px;">
+          <a href="reader.html" class="btn-primary" style="display:inline-block;">打开精读模式</a>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<script>
+// ── Book data ──
+const books = [
+  { title:"存在与虚无", author:"让-保罗·萨特", pct:78, date:"2小时前", color:"linear-gradient(145deg,#8B1A1A,#2D0A0A)", status:"reading" },
+  { title:"纯粹理性批判", author:"伊曼努尔·康德", pct:23, date:"昨天", color:"linear-gradient(145deg,#1A3A6B,#0A1520)", status:"reading" },
+  { title:"存在与时间", author:"马丁·海德格尔", pct:45, date:"3天前", color:"linear-gradient(145deg,#1A4A2A,#0A2010)", status:"reading" },
+  { title:"哲学研究", author:"路德维希·维特根斯坦", pct:100, date:"上周", color:"linear-gradient(145deg,#4A1A8B,#1A0840)", status:"done" },
+  { title:"悲剧的诞生", author:"弗里德里希·尼采", pct:0, date:"未开始", color:"linear-gradient(145deg,#7A3A10,#3A1A00)", status:"new" },
+  { title:"道德形而上学基础", author:"伊曼努尔·康德", pct:100, date:"上月", color:"linear-gradient(145deg,#6A5010,#3A2A00)", status:"done" },
+];
+
+function buildBookGrid() {
+  const grid = document.getElementById('book-grid');
+  grid.innerHTML = books.map(b => {
+    const r = 14; const c = 2 * Math.PI * r;
+    const offset = c - (c * b.pct / 100);
+    const statusClass = b.status === 'done' ? 'book-completed' : b.status === 'new' ? 'book-new' : '';
+    const pctLabel = b.status === 'done' ? '已完成' : b.status === 'new' ? '未开始' : b.pct + '%';
+    return `<div class="book-card ${statusClass}" onclick="openBook('${b.title}')">
+      <div class="book-cover" style="background:${b.color}">
+        ${b.title}
+        <svg class="cover-progress" viewBox="0 0 32 32">
+          <circle class="bg" cx="16" cy="16" r="${r}"/>
+          <circle class="fill" cx="16" cy="16" r="${r}"
+            stroke-dasharray="${c}" stroke-dashoffset="${offset}"/>
+        </svg>
+      </div>
+      <div class="book-card-body">
+        <div class="book-card-title">${b.title}</div>
+        <div class="book-card-author">${b.author}</div>
+        <div class="book-card-footer">
+          <span class="book-card-pct">${pctLabel}</span>
+          <span class="book-card-date">${b.date}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openBook(title) {
+  if (title === '存在与虚无') window.location.href = 'reader.html';
+  else alert(`《${title}》\n点击"继续精读"即可打开精读模式`);
+}
+
+// ── Screen switching ──
+function showScreen(name, el) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  el.classList.add('active');
+  const titles = { library:'我的书库', chat:'AI 对话', notes:'我的笔记', plans:'阅读计划' };
+  document.getElementById('page-title').textContent = titles[name] || '';
+}
+
+// ── Chat logic ──
+const aiResponses = {
+  default: `基于您阅读的《存在与虚无》和《纯粹理性批判》，这是一个很深刻的问题。<br><br>
+萨特认为自由是人的<strong>本体论属性</strong>——人被「判定为自由的」，无法逃脱选择；
+而康德的自由是<strong>道德实践理性</strong>的前提，是意志自律的基础。
+两者都强调自由，但萨特的自由令人焦虑，康德的自由带来道德秩序。<br><br>
+<span class="cite">§3.2 自在与自为</span> <span class="cite">§纯批 B476</span>`,
+  recommend: `根据您的阅读历史，推荐以下书目：<br><br>
+<strong>《存在与时间》海德格尔</strong> ⭐⭐⭐⭐<br>
+您已读了45%，萨特深受海德格尔影响，对比阅读收益极大。<br><br>
+<strong>《悲剧的诞生》尼采</strong> ⭐⭐⭐<br>
+从非理性角度补充您目前的理性主义阅读路径。`,
+  notes: `## 近期阅读笔记摘要<br><br>
+<strong>《存在与虚无》</strong>（读至78%）<br>
+• 自在存在 vs 自为存在的本体论区分<br>
+• 他者凝视与羞耻感<br>
+• 处境中的自由与责任<br><br>
+<strong>《纯粹理性批判》</strong>（读至23%）<br>
+• 先验感性论：时间与空间为直观形式`,
+  plan: `## 下个月阅读计划<br><br>
+<strong>第1-2周</strong>：完成《存在与虚无》（78%→100%）<br>
+每天约40分钟，重点精读「他者」章节<br><br>
+<strong>第3-4周</strong>：《纯粹理性批判》（23%→50%）<br>
+配合《存在与时间》交叉阅读`
+};
+
+function getAIResponse(text) {
+  if (text.includes('推荐') || text.includes('读什么')) return aiResponses.recommend;
+  if (text.includes('笔记') || text.includes('整理')) return aiResponses.notes;
+  if (text.includes('计划')) return aiResponses.plan;
+  return aiResponses.default;
+}
+
+function sendSuggestion(el) {
+  document.getElementById('chat-input').value = el.textContent;
+  sendMessage();
+}
+
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+
+function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  const msgs = document.getElementById('chat-messages');
+
+  // User message
+  msgs.innerHTML += `<div class="chat-msg user fade-in">
+    <div class="chat-avatar user-av">我</div>
+    <div class="chat-bubble">${text}</div>
+  </div>`;
+
+  // Typing indicator
+  msgs.innerHTML += `<div class="chat-msg ai fade-in" id="typing-msg">
+    <div class="chat-avatar ai-av">K</div>
+    <div class="chat-bubble">
+      <div class="typing-indicator">
+        <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
+      </div>
+    </div>
+  </div>`;
+  msgs.scrollTop = msgs.scrollHeight;
+
+  setTimeout(() => {
+    const typingEl = document.getElementById('typing-msg');
+    if (typingEl) typingEl.remove();
+    msgs.innerHTML += `<div class="chat-msg ai fade-in">
+      <div class="chat-avatar ai-av">K</div>
+      <div class="chat-bubble">${getAIResponse(text)}</div>
+    </div>`;
+    msgs.scrollTop = msgs.scrollHeight;
+  }, 1200);
+}
+
+// ── Init ──
+buildBookGrid();
+</script>
+</body>
+</html>

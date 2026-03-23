@@ -4,29 +4,18 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from langchain_core.documents import Document
 
 from backend.agents.recommendation_agent import RecommendationAgent, RecommendationResult, recommend_node
-
-
-def _make_doc(
-    text: str,
-    source: str = "sample.pdf",
-    title: str = "Test Book",
-    author: str = "Test Author",
-) -> Document:
-    return Document(
-        page_content=text,
-        metadata={"source": source, "book_title": title, "author": author, "section_indices": "1"},
-    )
 
 
 @pytest.fixture
 def mock_store():
     store = MagicMock()
-    store.similarity_search.return_value = [
-        _make_doc("存在主义哲学的核心思想...", title="存在与虚无", author="萨特"),
-        _make_doc("人的全面异化与资本主义...", title="1844年经济学哲学手稿", author="马克思"),
+    store.collection_name = "test_collection"
+    store.list_sources.return_value = ["存在与虚无.epub", "手稿.epub"]
+    store.list_book_titles.return_value = [
+        {"book_title": "存在与虚无", "author": "萨特", "source": "存在与虚无.epub"},
+        {"book_title": "1844年经济学哲学手稿", "author": "马克思", "source": "手稿.epub"},
     ]
     return store
 
@@ -34,7 +23,7 @@ def mock_store():
 @pytest.fixture
 def mock_llm():
     llm = MagicMock()
-    llm.invoke.return_value = MagicMock(content="### 《存在与虚无》\n\n推荐理由：...")
+    llm.invoke.return_value = MagicMock(content="### 《存在与虚无》（萨特）✅ 已在库\n\n推荐理由：...")
     return llm
 
 
@@ -45,39 +34,50 @@ class TestRecommendationAgent:
 
         assert isinstance(result, RecommendationResult)
         assert len(result.answer) > 0
-        assert len(result.citations) == 2
-        assert len(result.retrieved_docs) == 2
-        mock_store.similarity_search.assert_called_once_with("推荐几本小众哲学书", k=8)
+        assert result.citations == []
+        assert result.retrieved_docs == []
 
-    def test_run_empty_docs_returns_fallback(self, mock_llm):
+    def test_run_with_empty_library_still_calls_llm(self, mock_llm):
         store = MagicMock()
-        store.similarity_search.return_value = []
+        store.list_sources.return_value = []
+        store.list_book_titles.return_value = []
         agent = RecommendationAgent(store=store, llm=mock_llm)
 
         result = agent.run(query="推荐书")
 
+        # 即使书库为空，LLM 仍应被调用并返回推荐
         assert isinstance(result, RecommendationResult)
-        assert "书库" in result.answer or "没有" in result.answer
-        assert result.citations == []
-        assert result.retrieved_docs == []
-
-    def test_run_deduplicates_books(self, mock_llm):
-        # Two docs from the same book should appear once in book_infos
-        store = MagicMock()
-        store.similarity_search.return_value = [
-            _make_doc("片段1", title="Same Book", author="Author A"),
-            _make_doc("片段2", title="Same Book", author="Author A"),
-        ]
-        agent = RecommendationAgent(store=store, llm=mock_llm)
-        result = agent.run(query="推荐哲学书")
-
-        assert isinstance(result, RecommendationResult)
-        # LLM should have been called
+        assert len(result.answer) > 0
         mock_llm.invoke.assert_called_once()
-        # The user_prompt passed to LLM should contain the book only once in book_infos
+
+    def test_library_books_appear_in_prompt(self, mock_store, mock_llm):
+        agent = RecommendationAgent(store=mock_store, llm=mock_llm)
+        agent.run(query="推荐哲学书")
+
         call_args = mock_llm.invoke.call_args[0][0]
         user_msg = next(m["content"] for m in call_args if m["role"] == "user")
-        assert user_msg.count("Same Book") >= 1  # at least in evidence, but book list deduped
+        # 书库中的书应该出现在发给 LLM 的 prompt 里
+        assert "存在与虚无" in user_msg
+        assert "1844年经济学哲学手稿" in user_msg
+
+    def test_empty_library_note_in_prompt(self, mock_llm):
+        store = MagicMock()
+        store.list_sources.return_value = []
+        store.list_book_titles.return_value = []
+        agent = RecommendationAgent(store=store, llm=mock_llm)
+        agent.run(query="推荐书")
+
+        call_args = mock_llm.invoke.call_args[0][0]
+        user_msg = next(m["content"] for m in call_args if m["role"] == "user")
+        assert "书库目前为空" in user_msg
+
+    def test_current_book_appears_in_prompt(self, mock_store, mock_llm):
+        agent = RecommendationAgent(store=mock_store, llm=mock_llm)
+        agent.run(query="推荐类似的书", current_book="存在与虚无")
+
+        call_args = mock_llm.invoke.call_args[0][0]
+        user_msg = next(m["content"] for m in call_args if m["role"] == "user")
+        assert "存在与虚无" in user_msg
 
 
 class TestRecommendNode:
@@ -89,7 +89,7 @@ class TestRecommendNode:
 
         assert "answer" in patch_dict
         assert "citations" in patch_dict
-        assert "retrieved_docs_count" in patch_dict
+        assert patch_dict["retrieved_docs_count"] == 0
 
     def test_recommend_node_falls_back_to_user_input(self, mock_store, mock_llm):
         agent = RecommendationAgent(store=mock_store, llm=mock_llm)
@@ -98,3 +98,13 @@ class TestRecommendNode:
         patch_dict = recommend_node(state, agent=agent)
 
         assert "answer" in patch_dict
+
+    def test_recommend_node_passes_book_source(self, mock_store, mock_llm):
+        agent = RecommendationAgent(store=mock_store, llm=mock_llm)
+        state = {"user_input": "推荐类似的书", "book_source": "存在与虚无.epub"}
+
+        recommend_node(state, agent=agent)
+
+        call_args = mock_llm.invoke.call_args[0][0]
+        user_msg = next(m["content"] for m in call_args if m["role"] == "user")
+        assert "存在与虚无.epub" in user_msg
