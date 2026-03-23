@@ -1,6 +1,14 @@
 from __future__ import annotations
+import re as _re
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+try:
+    import jieba
+    _JIEBA_AVAILABLE = True
+except ImportError:
+    _JIEBA_AVAILABLE = False
+
 
 
 @runtime_checkable
@@ -35,6 +43,38 @@ class _LocalMarkdownStorage:
 
     def update(self, storage_path: str, content: str) -> None:
         Path(storage_path).write_text(content, encoding="utf-8")
+
+    def search(self, query: str, top_k: int = 5) -> list[tuple[str, str]]:
+        """全文搜索本地 .md 文件，返回 (storage_path, snippet) 列表，按相关度降序。"""
+        if _JIEBA_AVAILABLE:
+            terms = [t for t in jieba.cut(query) if len(t.strip()) > 1]
+        else:
+            terms = [t for t in query.split() if t]
+        if not terms:
+            return []
+
+        scored: list[tuple[str, str, int]] = []
+        for path in sorted(self.root.glob("*.md")):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            content_lower = content.lower()
+            score = sum(content_lower.count(t.lower()) for t in terms)
+            if score == 0:
+                continue
+            # 找第一个匹配词的位置，截取上下文片段
+            snippet_start = 0
+            for t in terms:
+                pos = content_lower.find(t.lower())
+                if pos >= 0:
+                    snippet_start = max(0, pos - 40)
+                    break
+            snippet = content[snippet_start: snippet_start + 160].replace("\n", " ").strip()
+            scored.append((str(path), snippet, score))
+
+        scored.sort(key=lambda x: x[2], reverse=True)
+        return [(p, s) for p, s, _ in scored[:top_k]]
 
 
 class LocalNoteStorage(_LocalMarkdownStorage):

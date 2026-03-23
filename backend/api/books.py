@@ -10,19 +10,26 @@ from pydantic import BaseModel
 from backend.agents.orchestrator_agent import invalidate_bm25_caches
 from backend.config import get_settings
 from backend.rag.chroma.chroma_store import ChromaStore
+from backend.rag.extracter.epub_extractor import EpubExtractor
+from backend.storage.book_catalog import get_book_catalog
 
 router = APIRouter(prefix="/books", tags=["books"])
 
 
 class BookEntry(BaseModel):
-    id: str           # book_id (UUID)
-    source: str       # ChromaDB source 路径（调试用）
-    book_title: str
+    id: str
+    title: str
     author: str
+    source: str
+    total_chunks: int
+    added_at: str
+    cover_path: str
+    status: str
+    progress: float
 
 
 class IngestResponse(BaseModel):
-    id: str           # book_id (UUID)
+    id: str
     source: str
     collection_name: str
     total_chunks: int
@@ -33,15 +40,20 @@ class IngestResponse(BaseModel):
 @router.get("", response_model=list[BookEntry])
 def list_books() -> list[BookEntry]:
     """返回书库中所有书籍的列表。"""
-    store = ChromaStore()
+    catalog = get_book_catalog()
     return [
         BookEntry(
-            id=entry.get("book_id", ""),
-            source=entry.get("source", ""),
-            book_title=entry.get("book_title", ""),
-            author=entry.get("author", ""),
+            id=b["book_id"],
+            title=b["title"],
+            author=b["author"],
+            source=b["source"],
+            total_chunks=b["total_chunks"],
+            added_at=b["added_at"],
+            cover_path=b["cover_path"],
+            status=b["status"],
+            progress=b["progress"],
         )
-        for entry in store.list_book_titles()
+        for b in catalog.get_all()
     ]
 
 
@@ -72,6 +84,17 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
         result = store.ingest(dest)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"入库失败：{exc}") from exc
+
+    cover_path = EpubExtractor.extract_cover(dest, settings.covers_dir, result.book_id)
+
+    get_book_catalog().add(
+        book_id=result.book_id,
+        title=result.book_title,
+        author=result.author,
+        source=result.source,
+        total_chunks=result.total_chunks,
+        cover_path=cover_path,
+    )
 
     invalidate_bm25_caches()
 

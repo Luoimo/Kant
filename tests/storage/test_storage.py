@@ -156,3 +156,25 @@ class TestLocalPlanStorage:
         storage = LocalPlanStorage(root=tmp_path)
         result = storage.save("content", "plan_x")
         assert result is None or isinstance(result, str)
+
+    def test_mark_chapter_done_toggles_checkbox(self, tmp_path):
+        content = "## 章节进度\n\n- [ ] 先验感性论（约45分钟）\n- [ ] 先验分析论（约90分钟）\n"
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save(content, safe_plan_name("纯粹理性批判"))
+        result = storage.mark_chapter_done("纯粹理性批判", "先验感性论")
+        assert result is True
+        updated = (tmp_path / "纯粹理性批判.md").read_text(encoding="utf-8")
+        assert "- [x] 先验感性论" in updated
+        assert "- [ ] 先验分析论" in updated
+
+    def test_mark_chapter_done_returns_false_when_not_found(self, tmp_path):
+        content = "## 章节进度\n\n- [ ] 先验感性论（约45分钟）\n"
+        storage = LocalPlanStorage(root=tmp_path)
+        storage.save(content, safe_plan_name("纯粹理性批判"))
+        result = storage.mark_chapter_done("纯粹理性批判", "不存在的章节")
+        assert result is False
+
+    def test_mark_chapter_done_returns_false_when_no_plan(self, tmp_path):
+        storage = LocalPlanStorage(root=tmp_path)
+        result = storage.mark_chapter_done("不存在的书", "第1章")
+        assert result is False

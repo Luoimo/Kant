@@ -158,7 +158,9 @@ def _build_supervisor_tools(
         resolved_title = book_title or _title_from_docs(result.retrieved_docs)
         if resolved_title:
             try:
-                deps.notes_agent.process_qa(query, result.answer, resolved_title)
+                from backend.storage.book_catalog import book_id_from_source
+                note_book_id = book_id_from_source(book_source) if book_source else ""
+                deps.notes_agent.process_qa(query, result.answer, resolved_title, book_id=note_book_id)
             except Exception as e:
                 print(f"[Supervisor.tool] note hook failed: {e}", file=sys.stderr)
 
@@ -231,7 +233,7 @@ def build_minimal_supervisor_graph(
         deepread_agent=DeepReadAgent(store=store),
         notes_agent=NoteAgent(note_vector_store=note_vector_store),
         plan_agent=PlanEditor(store=store),
-        recommend_agent=RecommendationAgent(store=store),
+        recommend_agent=RecommendationAgent(),
         mem0=mem0,
     )
 

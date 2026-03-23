@@ -210,6 +210,8 @@ class IngestResult:
     skipped: int            # 因去重跳过的数量
     collection_name: str
     book_id: str = ""       # uuid5(NAMESPACE_URL, source) — 稳定唯一书籍标识
+    book_title: str = ""
+    author: str = ""
 
     def __str__(self) -> str:
         return (
@@ -316,6 +318,8 @@ class ChromaStore:
         db = self._resolve_db(collection_name)
         book_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, str(path)))
         result = self._ingest_chunks_to_db(chunks, db, source=str(path), book_id=book_id)
+        result.book_title = book_content.metadata.get("title", "")
+        result.author = book_content.metadata.get("author", "")
         logger.info("  ✓ 入库完成：%s", result)
 
         return result
@@ -422,72 +426,31 @@ class ChromaStore:
         """
         返回 collection 中的所有文档（用于构建 BM25 索引等离线任务）。
 
+        使用分页避免 Chroma Cloud 每次 Get 最多 300 条的限制。
+
         :param collection_name: 指定 collection；None 则使用默认
         :param filter:          Chroma where 条件，例如 ``{"source": "path/to/book.epub"}``
         """
         db = self._resolve_db(collection_name)
-        get_kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
+        base_kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
         if filter:
-            get_kwargs["where"] = filter
-        results = db._collection.get(**get_kwargs)
-        return [
-            Document(page_content=doc, metadata=meta)
-            for doc, meta in zip(
-                results.get("documents") or [],
-                results.get("metadatas") or [],
+            base_kwargs["where"] = filter
+
+        all_docs: list[Document] = []
+        offset = 0
+        while True:
+            results = db._collection.get(**base_kwargs, limit=self.ingest_config.embed_batch_size, offset=offset)
+            batch_docs = results.get("documents") or []
+            batch_metas = results.get("metadatas") or []
+            all_docs.extend(
+                Document(page_content=doc, metadata=meta)
+                for doc, meta in zip(batch_docs, batch_metas)
             )
-        ]
+            if len(batch_docs) < self.ingest_config.embed_batch_size:
+                break
+            offset += self.ingest_config.embed_batch_size
+        return all_docs
 
-    def list_sources(self) -> list[str]:
-        """列出当前 collection 中所有已入库的文件来源路径（去重）。"""
-        collection = self._db._collection
-        results = collection.get(include=["metadatas"])
-        sources = {
-            meta.get("source", "")
-            for meta in (results.get("metadatas") or [])
-            if meta
-        }
-        return sorted(sources - {""})
-
-    def list_book_titles(self) -> list[dict[str, str]]:
-        """
-        返回库中所有书的 {book_title, author, source} 列表（去重）。
-
-        每本书从主 collection 中取一条 metadata 即可，不需要向量查询。
-        用于 RecommendationAgent 标注推荐结果是否已在库中。
-        """
-        sources = self.list_sources()
-        books: list[dict[str, str]] = []
-        seen: set[str] = set()
-        for src in sources:
-            try:
-                results = self._db._collection.get(
-                    where={"source": src},
-                    include=["metadatas"],
-                    limit=1,
-                )
-                metas = results.get("metadatas") or []
-                if metas:
-                    title = metas[0].get("book_title", "")
-                    author = metas[0].get("author", "")
-                    if title and title not in seen:
-                        seen.add(title)
-                        books.append({
-                            "book_title": title,
-                            "author": author,
-                            "source": src,
-                            "book_id": metas[0].get("book_id", ""),
-                        })
-            except Exception as exc:
-                logger.warning("list_book_titles：跳过 source=%s，原因：%s", src, exc)
-        return books
-
-    def resolve_book_by_id(self, book_id: str) -> dict | None:
-        """Return {book_id, source, book_title, author} for a given book_id, or None."""
-        for entry in self.list_book_titles():
-            if entry.get("book_id") == book_id:
-                return entry
-        return None
 
     # ------------------------------------------------------------------
     # 内部工具

@@ -1,4 +1,4 @@
-"""Tests for PlanGenerator — no real API calls, no real ChromaStore."""
+"""Tests for PlanEditor.generate() — no real API calls, no real ChromaStore."""
 from __future__ import annotations
 
 import tempfile
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.documents import Document
 
-from backend.agents.plan_generator import PlanGenerator
+from backend.agents.plan_editor import PlanEditor
 
 
 def _make_store(docs: list[Document] | None = None) -> MagicMock:
@@ -17,11 +17,11 @@ def _make_store(docs: list[Document] | None = None) -> MagicMock:
     store.get_all_documents.return_value = docs or [
         Document(
             page_content="先验感性论内容" * 100,
-            metadata={"chapter_title": "先验感性论", "source": "kant.epub"},
+            metadata={"section_title": "先验感性论", "source": "kant.epub"},
         ),
         Document(
             page_content="先验分析论内容" * 200,
-            metadata={"chapter_title": "先验分析论", "source": "kant.epub"},
+            metadata={"section_title": "先验分析论", "source": "kant.epub"},
         ),
     ]
     return store
@@ -33,10 +33,10 @@ def _make_llm(plan_text: str = "## 建议日程\n\n第1周读第1章") -> MagicM
     return llm
 
 
-class TestPlanGenerator:
+class TestPlanEditorGenerate:
     def test_generate_returns_markdown_string(self):
         with tempfile.TemporaryDirectory() as d:
-            gen = PlanGenerator(
+            gen = PlanEditor(
                 store=_make_store(),
                 llm=_make_llm(),
                 plan_storage_dir=Path(d),
@@ -47,7 +47,7 @@ class TestPlanGenerator:
 
     def test_generate_includes_chapter_checkboxes(self):
         with tempfile.TemporaryDirectory() as d:
-            gen = PlanGenerator(
+            gen = PlanEditor(
                 store=_make_store(),
                 llm=_make_llm(),
                 plan_storage_dir=Path(d),
@@ -58,7 +58,7 @@ class TestPlanGenerator:
 
     def test_generate_writes_plan_file(self):
         with tempfile.TemporaryDirectory() as d:
-            gen = PlanGenerator(
+            gen = PlanEditor(
                 store=_make_store(),
                 llm=_make_llm(),
                 plan_storage_dir=Path(d),
@@ -69,7 +69,7 @@ class TestPlanGenerator:
 
     def test_generate_with_reading_goal(self):
         with tempfile.TemporaryDirectory() as d:
-            gen = PlanGenerator(
+            gen = PlanEditor(
                 store=_make_store(),
                 llm=_make_llm(),
                 plan_storage_dir=Path(d),
@@ -84,7 +84,7 @@ class TestPlanGenerator:
     def test_generate_skips_rag_when_book_not_in_library(self):
         store = _make_store(docs=[])  # empty → book not in library
         with tempfile.TemporaryDirectory() as d:
-            gen = PlanGenerator(
+            gen = PlanEditor(
                 store=store,
                 llm=_make_llm(),
                 plan_storage_dir=Path(d),
@@ -96,14 +96,14 @@ class TestPlanGenerator:
     def test_generate_idempotent_overwrites_existing(self):
         """Calling generate twice for same book overwrites the file (not appends)."""
         with tempfile.TemporaryDirectory() as d:
-            gen = PlanGenerator(
+            gen = PlanEditor(
                 store=_make_store(),
                 llm=_make_llm("## 建议日程\n\n第一次生成"),
                 plan_storage_dir=Path(d),
             )
             gen.generate("纯粹理性批判", book_source="kant.epub")
 
-            gen2 = PlanGenerator(
+            gen2 = PlanEditor(
                 store=_make_store(),
                 llm=_make_llm("## 建议日程\n\n第二次生成"),
                 plan_storage_dir=Path(d),
