@@ -56,7 +56,7 @@ class TestReaderInitEndpoint:
         mock_editor = MagicMock()
         mock_editor.generate.return_value = _SAMPLE_PLAN
         with patch("backend.api.reader.get_book_catalog", return_value=_mock_catalog()), \
-             patch("backend.api.reader.PlanEditor", return_value=mock_editor):
+             patch("backend.api.reader.get_plan_editor", return_value=mock_editor):
             resp = client.post(f"/reader/{_BOOK_ID}/init", json={"reading_goal": "通读"})
         assert resp.status_code == 200
         data = resp.json()
@@ -68,7 +68,7 @@ class TestReaderInitEndpoint:
         mock_editor = MagicMock()
         mock_editor.generate.return_value = _SAMPLE_PLAN
         with patch("backend.api.reader.get_book_catalog", return_value=_mock_catalog()), \
-             patch("backend.api.reader.PlanEditor", return_value=mock_editor):
+             patch("backend.api.reader.get_plan_editor", return_value=mock_editor):
             resp = client.post(f"/reader/{_BOOK_ID}/init", json={})
         assert resp.status_code == 200
 
