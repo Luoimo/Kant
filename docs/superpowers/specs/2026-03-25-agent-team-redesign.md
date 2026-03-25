@@ -269,8 +269,7 @@ class AgentTeam:
         """Called by POST /books/upload after successful ingest."""
         for pool in self.pools.values():
             for worker in pool.all_workers():
-                if hasattr(worker, "_agent") and hasattr(worker._agent, "_retriever"):
-                    worker._agent._retriever.invalidate_bm25()
+                worker.invalidate_bm25()   # polymorphic; no-op on workers without caches
 ```
 
 `books.py` is added to the **修改** list:
