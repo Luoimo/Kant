@@ -36,8 +36,6 @@ class Settings(BaseSettings):
 
     # Mem0 记忆管理
     mem0_user_id: str = "kant-user"
-    mem0_chroma_collection_name: str = ""
-
     # Note and plan storage
     note_storage_dir: str = "data/notes"
     plan_storage_dir: str = "data/plans"

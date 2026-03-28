@@ -37,7 +37,10 @@ class LLMReranker:
             f"候选段落：\n{numbered}"
         )
         try:
-            msg = self._llm.invoke([{"role": "user", "content": prompt}])
+            msg = self._llm.invoke(
+                [{"role": "user", "content": prompt}],
+                config={"callbacks": []},  # 阻断回调传播，防止打分流泄漏到 SSE token 流
+            )
             content = getattr(msg, "content", str(msg))
             scores = _parse_scores(content, len(docs))
             ranked = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)

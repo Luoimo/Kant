@@ -1,40 +1,59 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.api.chat import router as chat_router
 from backend.api.books import router as books_router
 from backend.api.notes import router as notes_router
 from backend.api.reader import router as reader_router
-from backend.memory.mem0_store import Mem0Store
-from backend.team.team import AgentTeam
-from backend.team.dispatcher import Dispatcher
-
-_team: AgentTeam | None = None
-_dispatcher: Dispatcher | None = None
-
-
-def get_dispatcher() -> Dispatcher:
-    if _dispatcher is None:
-        raise RuntimeError("App not started — lifespan not complete")
-    return _dispatcher
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _team, _dispatcher
-    _team = AgentTeam()
-    _team.startup()
-    mem0 = Mem0Store()
-    _dispatcher = Dispatcher(_team, mem0)
-    app.state.dispatcher = _dispatcher
+    from backend.agents.deepread_agent import DeepReadAgent
+    from backend.agents.note_agent import NoteAgent
+    from backend.agents.plan_editor import PlanEditor
+    from backend.memory.mem0_store import Mem0Store
+    from backend.storage.note_vector_store import make_note_vector_store
+    from backend.config import get_settings
+
+    settings = get_settings()
+    note_vector_store = make_note_vector_store(settings)
+
+    app.state.agent = DeepReadAgent()
+    app.state.note_agent = NoteAgent(note_vector_store=note_vector_store)
+    app.state.plan_editor = PlanEditor()
+    app.state.mem0 = Mem0Store()
+
+    print("[main] app started")
     yield
-    _team.shutdown()
+    print("[main] app stopped")
 
 
 app = FastAPI(title="Kant Reading Agent", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(chat_router)
 app.include_router(books_router)
 app.include_router(notes_router)
 app.include_router(reader_router)
+
+# Serve extracted cover images
+_covers_dir = Path("data/covers")
+_covers_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/covers", StaticFiles(directory=str(_covers_dir)), name="covers")
+
+# Serve EPUB files for in-browser reader
+_books_dir = Path("data/books")
+_books_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/ebooks", StaticFiles(directory=str(_books_dir)), name="ebooks")

@@ -1,16 +1,6 @@
 from __future__ import annotations
-from typing import Protocol, runtime_checkable
 
 from backend.storage.note_storage import _LocalMarkdownStorage
-
-
-@runtime_checkable
-class PlanStorage(Protocol):
-    def save(self, content: str, plan_id: str) -> str | None: ...
-    def load(self, storage_path: str) -> str: ...
-    def list(self, prefix: str = "") -> list[str]: ...
-    def delete(self, storage_path: str) -> None: ...
-    def update(self, storage_path: str, content: str) -> None: ...
 
 
 class LocalPlanStorage(_LocalMarkdownStorage):
@@ -24,4 +14,4 @@ class LocalPlanStorage(_LocalMarkdownStorage):
         return self._save(content, plan_id)
 
 
-__all__ = ["PlanStorage", "LocalPlanStorage"]
+__all__ = ["LocalPlanStorage"]

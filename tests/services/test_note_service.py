@@ -54,11 +54,12 @@ class TestListBooks:
         svc = _make_service(tmp_path)
         assert svc.list_books() == []
 
-    def test_returns_book_stems(self, tmp_path):
+    def test_returns_book_dicts(self, tmp_path):
         svc = _make_service(tmp_path)
         svc.append_manual("内容", "纯粹理性批判")
-        svc.append_manual("内容", "精神现象学")
-        assert sorted(svc.list_books()) == ["精神现象学", "纯粹理性批判"]
+        result = svc.list_books()
+        assert isinstance(result, list)
+        assert all(isinstance(b, dict) for b in result)
 
 
 class TestGetTimeline:

@@ -3,13 +3,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel
 
 from backend.config import get_settings
 from backend.storage.book_catalog import get_book_catalog, get_plan_catalog
 from backend.storage.plan_storage import LocalPlanStorage
-from backend.team.team import get_plan_editor
 
 router = APIRouter(prefix="/reader", tags=["reader"])
 
@@ -48,10 +47,10 @@ class ReaderProgressRequest(BaseModel):
 
 
 @router.post("/{book_id}/init")
-def reader_init(book_id: str, req: ReaderInitRequest = Body(default=ReaderInitRequest())) -> dict:
+def reader_init(book_id: str, request: Request, req: ReaderInitRequest = Body(default=ReaderInitRequest())) -> dict:
     """Auto-generate a reading plan when user opens a book. Idempotent."""
     book = _resolve(book_id)
-    gen = get_plan_editor()
+    gen = request.app.state.plan_editor
     plan = gen.generate(
         book["title"],
         book_source=book["source"],
