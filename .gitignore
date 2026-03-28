@@ -45,3 +45,9 @@ Thumbs.db
 
 # cursor
 .cursor
+
+# 参考项目
+reference
+
+#前端
+frontend/node_modules

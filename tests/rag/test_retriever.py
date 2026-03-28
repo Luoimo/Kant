@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from langchain_core.documents import Document
 
-from backend.rag.retriever.bm25_retriever import BM25Retriever, _tokenize
+from backend.rag.retriever.bm25_retriever import BM25Retriever
+from backend.utils.text import tokenize as _tokenize
 from backend.rag.retriever.query_rewriter import QueryRewriter
 from backend.rag.retriever.reranker import LLMReranker, _parse_scores
 from backend.rag.retriever.hybrid_retriever import (

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import List
 
 
 @dataclass
@@ -18,7 +17,7 @@ class InputSafetyResult:
 
     allowed: bool
     reason: str
-    categories: List[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)
     sanitized_text: str = ""
 
 

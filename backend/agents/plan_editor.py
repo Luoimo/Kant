@@ -7,17 +7,19 @@
 """
 from __future__ import annotations
 
+import logging
 import re
-import sys
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
-from backend.llm.openai_client import get_llm, build_messages_context
+from backend.llm.openai_client import get_llm
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.storage.plan_storage import LocalPlanStorage
 from backend.storage.book_catalog import get_plan_catalog
@@ -45,6 +47,11 @@ _EDIT_SYSTEM = """你是"阅读计划助手"，专门帮用户修改或扩展已
 - 保留 ## 建议日程 段落，按需更新内容
 - 不要增加新的顶级标题
 """
+
+
+def _parse_duration_mins(time_str: str) -> float:
+    val = float(time_str.replace("约", "").replace("分钟", "").replace("小时", "").strip())
+    return val * 60 if "小时" in time_str else val
 
 
 @dataclass(frozen=True)
@@ -92,7 +99,7 @@ class PlanEditor:
         file_path = self._write(book_title, content, book_id=book_id)
         if book_id:
             get_plan_catalog().upsert(book_id=book_id, file_path=str(file_path), reading_goal=reading_goal)
-        print(f"[PlanEditor] generated plan for 《{book_title}》", file=sys.stdout)
+        logger.info("generated plan for 《%s》", book_title)
         return content
 
     # ------------------------------------------------------------------
@@ -107,7 +114,6 @@ class PlanEditor:
         book_id: str = "",
         action: Literal["edit", "extend"] = "edit",
         memory_context: str = "",
-        plan_messages: list[AnyMessage] | None = None,
     ) -> PlanEditResult:
         self._current_book_id = book_id
 
@@ -119,10 +125,9 @@ class PlanEditor:
         if memory_context:
             parts.append(f"[历史记录参考]\n{memory_context}")
 
-        history = build_messages_context(plan_messages or [])
-        input_messages = history + [("user", "\n\n".join(parts))]
+        input_messages = [("user", "\n\n".join(parts))]
 
-        print(f"[PlanEditor] run book={book_title!r} action={action}", file=sys.stdout)
+        logger.info("run book=%r action=%s", book_title, action)
 
         result = self._react_agent.invoke(
             {"messages": input_messages},
@@ -141,7 +146,7 @@ class PlanEditor:
                 if book_id and file_path:
                     get_plan_catalog().upsert(book_id=book_id, file_path=file_path)
         except Exception as e:
-            print(f"[PlanEditor] storage failed: {e}", file=sys.stderr)
+            logger.warning("storage failed: %s", e)
 
         return PlanEditResult(answer=answer, citations=[], retrieved_docs=[])
 
@@ -159,7 +164,7 @@ class PlanEditor:
                 filter={"source": book_source},
             )
         except Exception as e:
-            print(f"[PlanEditor] chapter extraction failed: {e}", file=sys.stderr)
+            logger.warning("chapter extraction failed: %s", e)
             return []
 
         if not docs:
@@ -188,10 +193,7 @@ class PlanEditor:
         reading_goal: str,
         chapters: list[tuple[str, str]],
     ) -> str:
-        total_mins = sum(
-            float(t.replace("约", "").replace("分钟", "").replace("小时", "")) * (60 if "小时" in t else 1)
-            for _, t in chapters
-        ) if chapters else 60.0
+        total_mins = sum(_parse_duration_mins(t) for _, t in chapters) if chapters else 60.0
         total_hours = f"约{total_mins/60:.1f}小时" if total_mins >= 60 else f"约{total_mins:.0f}分钟"
 
         msgs = [
@@ -207,7 +209,7 @@ class PlanEditor:
             resp = self._llm.invoke(msgs)
             return resp.content.strip()
         except Exception as e:
-            print(f"[PlanEditor] schedule LLM failed: {e}", file=sys.stderr)
+            logger.warning("schedule LLM failed: %s", e)
             return "建议每天安排固定阅读时间，循序渐进完成计划。"
 
     def _build_plan(

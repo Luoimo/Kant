@@ -118,7 +118,8 @@ class Mem0Store:
         try:
             raw = self._client.search(
                 query=query,
-                user_id=self._user_id
+                user_id=self._user_id,
+                limit=top_k,
             )
             logger.debug("Mem0 search 原始返回类型=%s 内容=%s", type(raw).__name__, raw)
             # Cloud API 返回直接列表；少数版本可能包在 {"results":[]} 或 {"memories":[]} 里
@@ -128,7 +129,7 @@ class Mem0Store:
                 items = raw.get("results") or raw.get("memories") or []
             else:
                 items = []
-            return [r["memory"] for r in items if isinstance(r, dict) and "memory" in r]
+            return [r["memory"] for r in items if isinstance(r, dict) and "memory" in r][:top_k]
         except Exception as exc:
             logger.warning("Mem0 search 失败：%s", exc)
             return []

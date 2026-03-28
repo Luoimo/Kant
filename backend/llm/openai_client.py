@@ -4,7 +4,6 @@
 # @File:openai_client.py
 # @Project:Kant
 
-from langchain_core.messages import AnyMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from backend.config import get_settings
@@ -30,16 +29,3 @@ def get_embeddings():
         openai_api_key=s.openai_api_key,
         openai_api_base=s.openai_base_url,
     )
-
-
-def build_messages_context(messages: list[AnyMessage] | None, max_turns: int = 4) -> list[dict]:
-    """将 agent 消息历史转为 LLM messages 格式，最多保留最近 max_turns 条。"""
-    if not messages:
-        return []
-    return [
-        {
-            "role": "assistant" if getattr(m, "type", "") == "ai" else "user",
-            "content": getattr(m, "content", ""),
-        }
-        for m in messages[-max_turns:]
-    ]

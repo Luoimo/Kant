@@ -7,7 +7,6 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend.agents.orchestrator_agent import invalidate_bm25_caches
 from backend.config import get_settings
 from backend.rag.chroma.chroma_store import ChromaStore
 from backend.rag.extracter.epub_extractor import EpubExtractor
@@ -95,8 +94,6 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
         total_chunks=result.total_chunks,
         cover_path=cover_path,
     )
-
-    invalidate_bm25_caches()
 
     return IngestResponse(
         id=result.book_id,

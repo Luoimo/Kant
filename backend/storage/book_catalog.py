@@ -17,11 +17,6 @@ from typing import Iterator
 # Utility
 # ---------------------------------------------------------------------------
 
-def book_id_from_source(source: str) -> str:
-    """Deterministic book_id: uuid5(NAMESPACE_URL, source). Same formula as chroma_store.ingest()."""
-    return str(_uuid.uuid5(_uuid.NAMESPACE_URL, source))
-
-
 # ---------------------------------------------------------------------------
 # DDL
 # ---------------------------------------------------------------------------
@@ -246,5 +241,4 @@ def get_plan_catalog() -> PlanCatalog:
 __all__ = [
     "BookCatalog", "NoteCatalog", "PlanCatalog",
     "get_book_catalog", "get_note_catalog", "get_plan_catalog",
-    "book_id_from_source",
 ]
