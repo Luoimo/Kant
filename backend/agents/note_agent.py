@@ -11,8 +11,8 @@ live in NoteService (services/note_service.py).
 from __future__ import annotations
 
 import json
+import logging
 import re
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +22,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from backend.config import get_settings
 from backend.llm.openai_client import get_llm
 from backend.storage.book_catalog import get_note_catalog
+from backend.utils.text import safe_id
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # LLM 提炼提示词
@@ -98,7 +101,7 @@ class NoteAgent:
         try:
             extracted = self._extract(question, answer)
         except Exception as e:
-            print(f"[NoteAgent] extraction failed: {e}", file=sys.stderr)
+            logger.warning("extraction failed: %s", e)
             return None
 
         entry = NoteEntry(
@@ -118,11 +121,7 @@ class NoteAgent:
         if self._note_vector_store:
             self._save_to_vector_store(entry)
 
-        print(
-            f"[NoteAgent] processed Q&A for 《{book_title}》, "
-            f"concepts={entry.concepts}",
-            file=sys.stdout,
-        )
+        logger.info("processed Q&A for 《%s》, concepts=%s", book_title, entry.concepts)
         return entry
 
     # ------------------------------------------------------------------
@@ -168,7 +167,7 @@ class NoteAgent:
                 top_k=2,
             )
         except Exception as e:
-            print(f"[NoteAgent] association search failed: {e}", file=sys.stderr)
+            logger.warning("association search failed: %s", e)
             return []
 
     def _append_to_file(self, entry: NoteEntry, raw_question: str, path: Path) -> None:
@@ -201,7 +200,7 @@ class NoteAgent:
             f.write("\n".join(lines) + "\n")
 
     def _save_to_vector_store(self, entry: NoteEntry) -> None:
-        entry_id = f"qa_{_safe_id(entry.book_title)}_{entry.date}"
+        entry_id = f"qa_{safe_id(entry.book_title)}_{entry.date}"
         content = f"{entry.question_summary} {' '.join(entry.concepts)}"
         self._note_vector_store.add_entry(
             entry_id=entry_id,
@@ -214,10 +213,6 @@ class NoteAgent:
                 "entry_type": "qa",
             },
         )
-
-
-def _safe_id(text: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]", "_", text)[:40]
 
 
 __all__ = ["NoteAgent", "NoteEntry"]

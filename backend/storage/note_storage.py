@@ -1,23 +1,8 @@
 from __future__ import annotations
-import re as _re
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
-try:
-    import jieba
-    _JIEBA_AVAILABLE = True
-except ImportError:
-    _JIEBA_AVAILABLE = False
+from backend.utils.text import tokenize
 
-
-
-@runtime_checkable
-class NoteStorage(Protocol):
-    def save(self, content: str, note_id: str) -> str | None: ...   # returns storage_path or None
-    def load(self, storage_path: str) -> str: ...
-    def list(self, prefix: str = "") -> list[str]: ...
-    def delete(self, storage_path: str) -> None: ...
-    def update(self, storage_path: str, content: str) -> None: ...
 
 
 class _LocalMarkdownStorage:
@@ -46,10 +31,8 @@ class _LocalMarkdownStorage:
 
     def search(self, query: str, top_k: int = 5) -> list[tuple[str, str]]:
         """全文搜索本地 .md 文件，返回 (storage_path, snippet) 列表，按相关度降序。"""
-        if _JIEBA_AVAILABLE:
-            terms = [t for t in jieba.cut(query) if len(t.strip()) > 1]
-        else:
-            terms = [t for t in query.split() if t]
+        tokens = tokenize(query)
+        terms = [t for t in tokens if len(t.strip()) > 1]
         if not terms:
             return []
 
@@ -84,4 +67,4 @@ class LocalNoteStorage(_LocalMarkdownStorage):
         return self._save(content, note_id)
 
 
-__all__ = ["NoteStorage", "LocalNoteStorage"]
+__all__ = ["LocalNoteStorage"]

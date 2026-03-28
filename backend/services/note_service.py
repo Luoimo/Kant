@@ -8,16 +8,11 @@ No LLM. No agent logic. Handles:
 """
 from __future__ import annotations
 
-import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.storage.book_catalog import get_note_catalog, get_book_catalog
-
-
-def _safe_id(text: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]", "_", text)[:40]
+from backend.utils.text import safe_id
 
 
 class NoteService:
@@ -58,7 +53,7 @@ class NoteService:
         if self._note_vector_store:
             book = get_book_catalog().get_by_id(book_id)
             book_title = book["title"] if book else book_id
-            entry_id = f"manual_{_safe_id(book_title)}_{int(now.timestamp())}"
+            entry_id = f"manual_{safe_id(book_title)}_{int(now.timestamp())}"
             self._note_vector_store.add_entry(
                 entry_id=entry_id,
                 content=content,

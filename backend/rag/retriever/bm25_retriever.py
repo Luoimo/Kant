@@ -5,21 +5,9 @@ import logging
 
 from langchain_core.documents import Document
 
+from backend.utils.text import tokenize
+
 logger = logging.getLogger(__name__)
-
-
-def _tokenize(text: str) -> list[str]:
-    """
-    中文用 jieba 分词；未安装 jieba 时退回字符级 tokenize。
-    jieba 会在首次调用时自动静默加载词典。
-    """
-    try:
-        import jieba
-        jieba.setLogLevel(logging.WARNING)
-        return list(jieba.cut(text))
-    except ImportError:
-        logger.warning("jieba 未安装，退回字符级 tokenize（pip install jieba）")
-        return list(text)
 
 
 class BM25Retriever:
@@ -37,7 +25,7 @@ class BM25Retriever:
             self._bm25 = None
             logger.debug("BM25 索引为空（无文档）")
             return
-        corpus = [_tokenize(doc.page_content) for doc in documents]
+        corpus = [tokenize(doc.page_content) for doc in documents]
         self._bm25 = BM25Okapi(corpus)
         logger.debug("BM25 索引构建完成，共 %d 篇文档", len(documents))
 
@@ -45,7 +33,7 @@ class BM25Retriever:
         """返回 top-k (Document, BM25 score) 对，按分数降序。"""
         if self._bm25 is None:
             return []
-        tokens = _tokenize(query)
+        tokens = tokenize(query)
         scores = self._bm25.get_scores(tokens)
         top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
         return [(self._docs[i], float(scores[i])) for i in top_idx]
