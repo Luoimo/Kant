@@ -32,9 +32,5 @@ export const notesApi = {
 }
 
 export const readerApi = {
-  init: (bookId, readingGoal = '') =>
-    api.post(`/reader/${bookId}/init`, { reading_goal: readingGoal }),
-  plan: (bookId) => api.get(`/reader/${bookId}/plan`),
-  progress: (bookId, chapter) =>
-    api.post(`/reader/${bookId}/progress`, { chapter }),
+  open: (bookId) => api.post(`/reader/${bookId}/open`),
 }
