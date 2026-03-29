@@ -1,7 +1,14 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -15,8 +22,8 @@ from backend.api.reader import router as reader_router
 async def lifespan(app: FastAPI):
     from backend.agents.deepread_agent import DeepReadAgent
     from backend.agents.note_agent import NoteAgent
-    from backend.agents.plan_editor import PlanEditor
     from backend.memory.mem0_store import Mem0Store
+    from backend.storage.book_catalog import get_conversation_storage
     from backend.storage.note_vector_store import make_note_vector_store
     from backend.config import get_settings
 
@@ -25,12 +32,12 @@ async def lifespan(app: FastAPI):
 
     app.state.agent = DeepReadAgent()
     app.state.note_agent = NoteAgent(note_vector_store=note_vector_store)
-    app.state.plan_editor = PlanEditor()
     app.state.mem0 = Mem0Store()
+    app.state.conv = get_conversation_storage()
 
-    print("[main] app started")
+    logging.getLogger(__name__).info("app started")
     yield
-    print("[main] app stopped")
+    logging.getLogger(__name__).info("app stopped")
 
 
 app = FastAPI(title="Kant Reading Agent", lifespan=lifespan)
