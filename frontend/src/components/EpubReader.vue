@@ -247,6 +247,96 @@ function goToHref(href) {
   showToc.value = false
 }
 
+async function goToCitation(citation) {
+  if (!rendition || !book) return
+
+  let href = null
+
+  // 1. Use spine index (most reliable — exact position from RAG metadata)
+  const indices = citation.section_indices
+  if (Array.isArray(indices) && indices.length > 0) {
+    const item = book.spine.get(indices[0])
+    if (item?.href) href = item.href
+  }
+
+  // 2. Fallback: fuzzy-match chapter/section title against TOC
+  if (!href) {
+    const target = citation.section_title || citation.chapter_title
+    if (target && toc.value.length) {
+      const entry = toc.value.find(t => t.label === target)
+        ?? toc.value.find(t => t.label.includes(target) || target.includes(t.label))
+      if (entry) href = entry.href
+    }
+  }
+
+  if (!href) return
+
+  pendingTocHref = href
+  await rendition.display(href)
+
+  if (citation.snippet) {
+    // Allow iframe to fully settle before searching
+    await new Promise(r => setTimeout(r, 250))
+    _highlightSnippet(citation.snippet)
+  }
+}
+
+function _highlightSnippet(snippet) {
+  const contents = rendition?.getContents?.()
+  if (!contents?.length) return
+  const doc = contents[0]?.document
+  const win = doc?.defaultView
+  if (!doc || !win) return
+
+  // Inject highlight styles once
+  if (!doc.getElementById('__kant_hl_style')) {
+    const s = doc.createElement('style')
+    s.id = '__kant_hl_style'
+    s.textContent = `
+      .kant-hl { background: rgba(255,200,0,0.55) !important; border-radius:2px; }
+      .kant-hl.kant-hl-fade { background: transparent !important; transition: background 1.5s ease-out; }
+    `
+    doc.head.appendChild(s)
+  }
+
+  // Remove any previous highlights
+  doc.querySelectorAll('.kant-hl').forEach(el => {
+    const p = el.parentNode
+    if (p) { el.replaceWith(...el.childNodes); p.normalize() }
+  })
+
+  const searchStr = snippet.replace(/…$/, '').slice(0, 60).trim()
+  if (!win.find?.(searchStr)) return
+
+  const sel = win.getSelection()
+  if (!sel?.rangeCount) return
+
+  try {
+    const range = sel.getRangeAt(0)
+    const span = doc.createElement('span')
+    span.className = 'kant-hl'
+    try {
+      range.surroundContents(span)
+    } catch {
+      const frag = range.extractContents()
+      span.appendChild(frag)
+      range.insertNode(span)
+    }
+    sel.removeAllRanges()
+    span.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+    setTimeout(() => {
+      span.classList.add('kant-hl-fade')
+      setTimeout(() => {
+        const p = span.parentNode
+        if (p) { span.replaceWith(...span.childNodes); p.normalize() }
+      }, 1500)
+    }, 2500)
+  } catch (e) {
+    console.warn('[EpubReader] highlight failed:', e)
+  }
+}
+
 onMounted(() => nextTick(() => init()))
 onUnmounted(() => {
   clearTimeout(timeoutId)
@@ -256,7 +346,7 @@ onUnmounted(() => {
 })
 watch(() => props.url, () => nextTick(() => init()))
 
-defineExpose({ prev, next, goToHref, currentChapter, toc })
+defineExpose({ prev, next, goToHref, goToCitation, currentChapter, toc })
 </script>
 
 <template>

@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from backend.config import get_settings
@@ -57,7 +57,7 @@ def list_books() -> list[BookEntry]:
 
 
 @router.post("/upload", response_model=IngestResponse)
-async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
+async def upload_book(request: Request, file: UploadFile = File(...)) -> IngestResponse:
     """上传 EPUB 文件并触发入库流水线。"""
     filename = file.filename or ""
     if not filename.lower().endswith(".epub"):
@@ -94,6 +94,11 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
         total_chunks=result.total_chunks,
         cover_path=cover_path,
     )
+
+    # 清除 BM25 缓存，确保新书在下次检索时能被纳入索引
+    agent = getattr(request.app.state, "agent", None)
+    if agent is not None:
+        agent.invalidate_retriever()
 
     return IngestResponse(
         id=result.book_id,

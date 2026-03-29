@@ -24,6 +24,7 @@ const epubUrl = computed(() => {
 const savedCfi       = computed(() => readerStore.loadCfi(bookId.value))
 const currentChapter = ref('')
 const selectedText   = ref(null)   // { text, cfi } | null
+const epubReader     = ref(null)
 
 function onChapterChange(chapter) {
   currentChapter.value = chapter
@@ -35,6 +36,10 @@ function onCfiChange(cfi) {
 
 function onTextSelected(sel) {
   selectedText.value = sel?.text ?? null
+}
+
+function navigateCitation(citation) {
+  epubReader.value?.goToCitation(citation)
 }
 
 onMounted(async () => {
@@ -84,6 +89,7 @@ onMounted(async () => {
       <div class="epub-panel">
         <EpubReader
           v-if="epubUrl"
+          ref="epubReader"
           :url="epubUrl"
           :initial-cfi="savedCfi"
           @chapter-change="onChapterChange"
@@ -100,6 +106,7 @@ onMounted(async () => {
           :book-title="book?.title || ''"
           :current-chapter="currentChapter"
           :selected-text="selectedText"
+          :navigate-citation="navigateCitation"
           @clear-selection="selectedText = null"
         />
       </div>

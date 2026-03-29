@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from langchain_core.documents import Document
@@ -95,6 +96,7 @@ class HybridRetriever:
         )
         self._reranker = self._build_reranker(llm)
         self._bm25_cache: dict[str, BM25Retriever] = {}  # filter_key → BM25Retriever
+        self._executor = ThreadPoolExecutor(max_workers=2)
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -118,17 +120,16 @@ class HybridRetriever:
         if rewritten != query:
             logger.info("QueryRewrite: %r → %r", query, rewritten)
 
-        # 2) 向量检索
-        vector_results = self._store.similarity_search_with_score(
-            rewritten,
-            k=cfg.fetch_k,
-            filter=filter,
+        # 2+3) 向量检索与 BM25 检索并行执行
+        bm25 = self._get_bm25(filter)
+        _f_vec = self._executor.submit(
+            self._store.similarity_search_with_score,
+            rewritten, k=cfg.fetch_k, filter=filter,
             collection_name=self._collection_name,
         )
-
-        # 3) BM25 检索（按 filter 中的 source 限定范围）
-        bm25 = self._get_bm25(filter)
-        bm25_results = bm25.search(rewritten, k=cfg.fetch_k)
+        _f_bm25 = self._executor.submit(bm25.search, rewritten, k=cfg.fetch_k)
+        vector_results = _f_vec.result()
+        bm25_results = _f_bm25.result()
 
         # 4) RRF 融合
         all_docs = _dedupe(vector_results + bm25_results)

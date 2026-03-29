@@ -15,7 +15,7 @@ const router = createRouter({
         { path: '', redirect: '/library' },
         { path: 'library', name: 'library', component: LibraryView },
         { path: 'chat', name: 'chat', component: ChatView },
-        { path: 'reader/:bookId', name: 'reader', component: ReaderView },
+        { path: 'book/:bookId', name: 'reader', component: ReaderView },
         { path: 'notes', name: 'notes', component: NotesView },
       ],
     },

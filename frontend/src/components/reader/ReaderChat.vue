@@ -1,14 +1,16 @@
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onMounted, computed } from 'vue'
 import { NInput } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { fetchSSEStream } from '@/composables/useSSEStream'
+import axios from 'axios'
 
 const props = defineProps({
-  bookId:         { type: String, default: null },
-  bookTitle:      { type: String, default: '' },
-  currentChapter: { type: String, default: '' },
-  selectedText:   { type: String, default: null },
+  bookId:             { type: String,   default: null },
+  bookTitle:          { type: String,   default: '' },
+  currentChapter:     { type: String,   default: '' },
+  selectedText:       { type: String,   default: null },
+  navigateCitation:   { type: Function, default: null },
 })
 
 const emit = defineEmits(['clear-selection'])
@@ -19,6 +21,25 @@ const messages   = ref([])
 const inputText  = ref('')
 const loading    = ref(false)
 const messagesEl = ref(null)
+
+const threadId = computed(() => props.bookId ? `reader-${props.bookId}` : 'reader-default')
+
+onMounted(async () => {
+  if (!props.bookId) return
+  try {
+    const { data } = await axios.get('/chat/history', {
+      params: { thread_id: threadId.value, book_id: props.bookId, user_id: 'default', limit: 50 },
+    })
+    messages.value = data.map((m, i) => ({
+      id: `hist-${i}`,
+      role: m.role === 'assistant' ? 'ai' : 'user',
+      content: m.content,
+      citations: Array.isArray(m.citations) ? m.citations : [],
+    }))
+  } catch (e) {
+    console.warn('[ReaderChat] 加载历史失败', e)
+  }
+})
 
 // When new selectedText arrives, scroll to bottom and focus the quote bar
 watch(() => props.selectedText, async (val) => {
@@ -75,7 +96,7 @@ async function send() {
       {
         query: q,
         book_id: props.bookId || null,
-        thread_id: 'reader-default',
+        thread_id: threadId.value,
         user_id: 'default',
         selected_text: selectedText,
         current_chapter: props.currentChapter || null,
@@ -166,9 +187,11 @@ function clearMessages() {
                 v-for="(c, i) in msg.citations"
                 :key="i"
                 class="cite-chip"
+                :class="{ 'cite-chip--nav': !!navigateCitation }"
                 :title="c.snippet || ''"
+                @click="navigateCitation && navigateCitation(c)"
               >
-                {{ c.source || c.book_title }}
+                {{ c.section_title || c.chapter_title || c.book_title || c.source }}
               </span>
             </div>
           </div>
@@ -378,6 +401,18 @@ blockquote.quoted-text {
   padding: 2px 7px;
   border-radius: 4px;
   font-weight: 500;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cite-chip--nav {
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.cite-chip--nav:hover {
+  background: var(--accent);
+  color: white;
 }
 
 /* ── Typing indicator ── */

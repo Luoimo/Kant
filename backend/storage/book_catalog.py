@@ -5,6 +5,7 @@ File I/O stays in the agent/storage layer; this module only tracks metadata.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid as _uuid
 from contextlib import contextmanager
@@ -50,6 +51,19 @@ CREATE TABLE IF NOT EXISTS plans (
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    msg_id     TEXT PRIMARY KEY,
+    thread_id  TEXT NOT NULL,
+    book_id    TEXT NOT NULL DEFAULT '',
+    user_id    TEXT NOT NULL DEFAULT 'default',
+    role       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    citations  TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_thread ON conversation_messages (thread_id, created_at);
 """
 
 
@@ -66,6 +80,13 @@ class _DB:
                 stmt = stmt.strip()
                 if stmt:
                     conn.execute(stmt)
+            # Migration: add citations column for existing databases
+            try:
+                conn.execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN citations TEXT NOT NULL DEFAULT '[]'"
+                )
+            except Exception:
+                pass  # column already exists
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -218,6 +239,88 @@ class PlanCatalog(_DB):
 
 
 # ---------------------------------------------------------------------------
+# ConversationStorage
+# ---------------------------------------------------------------------------
+
+class ConversationStorage(_DB):
+    """Persist per-thread chat messages so history survives across sessions."""
+
+    def save_message(
+        self,
+        *,
+        thread_id: str,
+        book_id: str,
+        user_id: str,
+        role: str,
+        content: str,
+    ) -> None:
+        msg_id = str(_uuid.uuid4())
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation_messages
+                    (msg_id, thread_id, book_id, user_id, role, content, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (msg_id, thread_id, book_id, user_id, role, content, now),
+            )
+
+    def get_history(self, thread_id: str, limit: int = 20) -> list[dict]:
+        """Return the last *limit* messages in chronological order."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT role, content, citations FROM conversation_messages
+                WHERE thread_id = ?
+                ORDER BY created_at ASC LIMIT ?
+                """,
+                (thread_id, limit),
+            ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["citations"] = json.loads(d.get("citations") or "[]")
+            except Exception:
+                d["citations"] = []
+            result.append(d)
+        return result
+
+    def save_turn(
+        self,
+        *,
+        thread_id: str,
+        book_id: str,
+        user_id: str,
+        query: str,
+        answer: str,
+        citations: list[dict] | None = None,
+    ) -> None:
+        """Save a user query and assistant answer in one SQLite transaction."""
+        citations_json = json.dumps(citations or [], ensure_ascii=False)
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO conversation_messages
+                    (msg_id, thread_id, book_id, user_id, role, content, citations, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (str(_uuid.uuid4()), thread_id, book_id, user_id, "user", query, "[]", now),
+                    (str(_uuid.uuid4()), thread_id, book_id, user_id, "assistant", answer, citations_json, now),
+                ],
+            )
+
+    def delete_thread(self, thread_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM conversation_messages WHERE thread_id = ?", (thread_id,)
+            )
+
+
+# ---------------------------------------------------------------------------
 # Factories
 # ---------------------------------------------------------------------------
 
@@ -238,7 +341,11 @@ def get_plan_catalog() -> PlanCatalog:
     return PlanCatalog(_db_path())
 
 
+def get_conversation_storage() -> ConversationStorage:
+    return ConversationStorage(_db_path())
+
+
 __all__ = [
-    "BookCatalog", "NoteCatalog", "PlanCatalog",
-    "get_book_catalog", "get_note_catalog", "get_plan_catalog",
+    "BookCatalog", "NoteCatalog", "PlanCatalog", "ConversationStorage",
+    "get_book_catalog", "get_note_catalog", "get_plan_catalog", "get_conversation_storage",
 ]

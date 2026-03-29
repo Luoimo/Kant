@@ -66,5 +66,6 @@ feat/fix/refactor/docs/test/chore: <描述>
 - PR 使用 `git diff main...HEAD` 查看完整变更
 
 ## 可参考文档
+- docs/superpowers 从前的计划与设计文档
 - .claude/agents 执行特定任务时，从中选取角色进行扮演
 - .claude/rules 执行任务时，需要参考的限制和规则
