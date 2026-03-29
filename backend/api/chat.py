@@ -8,13 +8,12 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from backend.storage.book_catalog import ConversationStorage
+
 router = APIRouter(tags=["chat"])
 
 _TOOL_STATUS: dict[str, str] = {
-    "search_book_content": "正在检索书籍内容…",
-    "recommend_books": "正在查看书库…",
-    "get_reading_plan": "正在读取阅读计划…",
-    "update_reading_plan": "正在保存阅读计划…",
+    "search_books": "正在检索书库…",
 }
 
 
@@ -23,7 +22,6 @@ class ChatRequest(BaseModel):
     user_id: str = "default"
     book_id: str | None = None
     thread_id: str = "default"
-    active_tab: str | None = None
     selected_text: str | None = None
     current_chapter: str | None = None
 
@@ -57,6 +55,13 @@ def _fetch_memory(mem0, query: str) -> str:
         return ""
 
 
+def _resolve_thread_id(thread_id: str, user_id: str, book_id: str) -> str:
+    """Derive a stable thread ID: use explicit value if provided, else per-user-per-book."""
+    if thread_id and thread_id != "default":
+        return thread_id
+    return f"{user_id}:{book_id or 'global'}"
+
+
 def _build_query(req: ChatRequest, book_title: str) -> str:
     query = req.query
     if book_title:
@@ -66,6 +71,19 @@ def _build_query(req: ChatRequest, book_title: str) -> str:
     if req.current_chapter:
         query += f"\n\n【当前阅读章节】：{req.current_chapter}"
     return query
+
+
+@router.get("/chat/history")
+def get_chat_history(
+    request: Request,
+    thread_id: str = "default",
+    book_id: str = "",
+    user_id: str = "default",
+    limit: int = 50,
+) -> list[dict]:
+    """返回指定 thread 的历史消息，按时间正序。"""
+    resolved = _resolve_thread_id(thread_id, user_id, book_id)
+    return request.app.state.conv.get_history(resolved, limit=limit)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -92,12 +110,17 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
     memory_ctx = _fetch_memory(mem0, req.query)
     query = _build_query(req, book_title)
 
+    conv: ConversationStorage = request.app.state.conv
+    thread_id = _resolve_thread_id(req.thread_id, req.user_id, book_id)
+    history = conv.get_history(thread_id)
+
     result = agent.run(
         query=query,
         book_source=book_source,
         book_id=book_id,
         memory_context=memory_ctx,
         user_id=req.user_id,
+        history=history,
     )
 
     if book_title and result.retrieved_docs:
@@ -109,11 +132,17 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
         except Exception as exc:
             print(f"[chat] mem0 save failed: {exc}")
 
+    if result.answer:
+        _save_conversation(
+            conv, thread_id, book_id, req.user_id, req.query, result.answer,
+            citations=[c.__dict__ for c in result.citations],
+        )
+
     return ChatResponse(
         answer=result.answer,
         citations=[c.__dict__ for c in result.citations],
         retrieved_docs_count=len(result.retrieved_docs),
-        intent=req.active_tab or "deepread",
+        intent="deepread",
     )
 
 
@@ -138,11 +167,17 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
     memory_ctx = _fetch_memory(mem0, req.query)
     query = _build_query(req, book_title)
 
+    conv: ConversationStorage = request.app.state.conv
+    thread_id = _resolve_thread_id(req.thread_id, req.user_id, book_id)
+
     async def event_generator():
         answer_parts: list[str] = []
         docs_count = 0
+        stream_citations: list[dict] = []
         # Signal immediately so the frontend can drop the typing indicator
         yield f"data: {json.dumps({'type': 'thinking'}, ensure_ascii=False)}\n\n"
+        # Load history after emitting thinking so StreamingResponse headers are already sent
+        history = await asyncio.to_thread(conv.get_history, thread_id)
         try:
             async for event_type, data in agent.astream_events(
                 query=query,
@@ -150,6 +185,7 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                 book_id=book_id,
                 memory_context=memory_ctx,
                 user_id=req.user_id,
+                history=history,
             ):
                 if event_type == "token":
                     answer_parts.append(data)
@@ -159,7 +195,8 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                     yield f"data: {json.dumps({'type': 'status', 'text': label}, ensure_ascii=False)}\n\n"
                 elif event_type == "done":
                     docs_count = data["docs_count"]
-                    yield f"data: {json.dumps({'type': 'done', 'citations': data['citations'], 'docs_count': docs_count}, ensure_ascii=False)}\n\n"
+                    stream_citations = data["citations"]
+                    yield f"data: {json.dumps({'type': 'done', 'citations': stream_citations, 'docs_count': docs_count}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
             return
@@ -173,6 +210,11 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
             ))
         if mem0 and full_answer:
             tasks.append(asyncio.to_thread(mem0.add_qa, req.query, full_answer))
+        if full_answer:
+            tasks.append(asyncio.to_thread(
+                _save_conversation, conv, thread_id, book_id, req.user_id, req.query, full_answer,
+                stream_citations,
+            ))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -181,6 +223,24 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _save_conversation(
+    conv: ConversationStorage,
+    thread_id: str,
+    book_id: str,
+    user_id: str,
+    query: str,
+    answer: str,
+    citations: list[dict] | None = None,
+) -> None:
+    try:
+        conv.save_turn(
+            thread_id=thread_id, book_id=book_id, user_id=user_id,
+            query=query, answer=answer, citations=citations,
+        )
+    except Exception as exc:
+        print(f"[chat] conversation save failed: {exc}")
 
 
 def _run_note_hook(
