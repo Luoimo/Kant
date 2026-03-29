@@ -4,7 +4,6 @@ import logging
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-from pathlib import Path
 from typing import AsyncGenerator
 
 from langchain_core.documents import Document
@@ -37,21 +36,33 @@ _SYSTEM_PROMPT = """\
 你是"阅读助手"，帮助用户深度理解哲学和社科书籍。
 
 工具说明：
-- search_book_content  : 在用户本地书库检索原文证据。回答书中内容问题时必须调用。
-- recommend_books      : 获取用户已有书单，然后你基于自身知识推荐新书。
-- get_reading_plan     : 查看当前书籍的阅读计划。
-- update_reading_plan  : 保存修改后的阅读计划。修改计划时先调 get_reading_plan，\
-生成新内容后再调此工具保存。
+- search_books(search_query, scope, chapter)
+  - scope="current_book"（默认）：在当前书中检索原文证据
+  - scope="all_books"：跨全书库检索，用于跨书对比
+  - chapter 非空时：聚焦于指定章节（用于章节摘要）
 
-工作原则：
-1. 书中内容问答 — 必须有 search_book_content 的证据支撑，不编造书中事实
-2. 书籍推荐 — 先调 recommend_books 获取已有书单，再用你的知识推荐新书
-3. 计划查看/修改 — get_reading_plan 读，update_reading_plan 写
+工作模式：
 
-输出格式：
-- 内容问答：结构化回答 + 末尾「引用」小节（书名·章节）
-- 书籍推荐：每本用 ### 书名（作者）开头，含推荐理由和难度
-- 计划：展示完整 Markdown
+【概念解释模式】触发：用户划选文字，或问"什么意思/解释/这个概念"
+- 调用 search_books 检索该词上下文
+- 输出三层：① 词义 ② 书中含义（引用原文）③ 哲学/思想史背景
+
+【章节摘要模式】触发："总结这章/这节讲了什么/梳理一下"
+- 调用 search_books(chapter=当前章节名) 检索章节内容
+- 输出：核心论点 → 论证结构 → 关键术语
+
+【跨书对比模式】触发：涉及多本书、"对比/比较"，或问题超出当前书范围
+- 调用 search_books(scope="all_books") 检索
+- 书库中没有的书，用通识知识补充，末尾注明「（来自通识知识，非书库原文）」
+- 输出：结构化对比两书观点
+
+【苏格拉底模式】触发："我觉得/我认为/对吗/考我/测试我"
+- 验证模式：搜索书中反例或支撑证据，提出追问，不直接给答案
+- 测验模式：从书中抽取核心命题，出一道开放题
+
+【常规问答】其余书中内容问题
+- 必须有 search_books 的证据支撑，不编造书中事实
+- 输出：结构化回答 + 末尾「引用」小节（书名·章节）
 """
 
 
@@ -119,20 +130,27 @@ class DeepReadAgent:
         return self._get_retriever().search(effective_query, filter=filter_)
 
     def _build(self, *, book_source: str | None, book_id: str):
-        """Build a react_agent with bound tool closures. Returns (agent, current_docs)."""
+        """Build a react_agent with a single search_books tool closure. Returns (agent, current_docs)."""
         current_docs: list[Document] = []
         config = self.config
-        retriever = self._get_retriever()  # 复用类级缓存，BM25 跨请求复用
 
         @tool
-        def search_book_content(search_query: str) -> str:
-            """在用户本地书库中检索原文证据片段。
-            输入精简的搜索关键词；证据不足时可换关键词再调用一次。
+        def search_books(
+            search_query: str,
+            scope: str = "current_book",
+            chapter: str | None = None,
+        ) -> str:
+            """搜索书库内容。
+            search_query: 检索关键词或问题。
+            scope: "current_book"（默认，当前书）或 "all_books"（跨全书库，用于跨书对比）。
+            chapter: 章节名称，非空时聚焦该章节内容（用于章节摘要）。
             """
-            filter_ = {"source": book_source} if book_source else None
-            docs = retriever.search(search_query, filter=filter_)
+            docs = self._search_books_impl(search_query, scope, book_source, chapter)
 
-            logger.info("search query=%r source=%r hits=%d", search_query, book_source, len(docs))
+            logger.info(
+                "search_books query=%r scope=%r chapter=%r hits=%d",
+                search_query, scope, chapter, len(docs),
+            )
             if not docs:
                 return "未找到相关内容，请尝试换一种关键词。"
 
@@ -155,64 +173,10 @@ class DeepReadAgent:
                 )
             return sep.join(blocks)
 
-        @tool
-        def recommend_books(topic: str = "") -> str:
-            """获取用户本地书库已有书单，以便推荐时避免重复。
-            调用后请基于你的训练知识为用户推荐新书。
-            topic: 推荐主题或关键词（可为空）。
-            """
-            try:
-                from backend.storage.book_catalog import get_book_catalog
-                books = get_book_catalog().get_all()
-                if not books:
-                    return "用户本地书库为空，可自由推荐。"
-                lines = [f"- 《{b['title']}》（{b['author']}）" for b in books[:15]]
-                header = f"用户已有书库（共{len(books)}本），推荐时请避免重复：\n"
-                suffix = "\n\n请基于你的知识，为用户推荐与话题相关的、书库中尚未有的书籍。"
-                return header + "\n".join(lines) + suffix
-            except Exception as e:
-                return f"书库查询失败：{e}，请直接基于你的知识推荐。"
-
-        @tool
-        def get_reading_plan() -> str:
-            """查看当前书籍的阅读计划。修改计划前必须先调用此工具。"""
-            if not book_id:
-                return "当前未打开具体书籍，无法查看计划。"
-            try:
-                from backend.storage.book_catalog import get_plan_catalog
-                record = get_plan_catalog().get_by_book_id(book_id)
-                if not record:
-                    return "该书暂无阅读计划，请先在 Reader 模式中打开该书自动生成计划。"
-                path = Path(record["file_path"])
-                return path.read_text(encoding="utf-8") if path.exists() else "计划文件不存在。"
-            except Exception as e:
-                return f"加载计划失败：{e}"
-
-        @tool
-        def update_reading_plan(updated_content: str) -> str:
-            """将修改后的完整阅读计划 Markdown 保存到文件。
-            必须先调用 get_reading_plan 查看原计划，再生成完整新内容后调用此工具。
-            updated_content: 完整的新计划 Markdown 文本。
-            """
-            if not book_id:
-                return "当前未打开具体书籍，无法保存计划。"
-            try:
-                from backend.storage.book_catalog import get_plan_catalog
-                record = get_plan_catalog().get_by_book_id(book_id)
-                if not record:
-                    return "该书暂无计划记录，无法保存。请先在 Reader 模式中初始化。"
-                path = Path(record["file_path"])
-                path.write_text(updated_content, encoding="utf-8")
-                get_plan_catalog().touch(book_id)
-                logger.info("plan updated for book_id=%r", book_id)
-                return "计划已保存。"
-            except Exception as e:
-                return f"保存计划失败：{e}"
-
         from langgraph.prebuilt import create_react_agent
         react_agent = create_react_agent(
             self.llm,
-            [search_book_content, recommend_books, get_reading_plan, update_reading_plan],
+            [search_books],
             prompt=_SYSTEM_PROMPT,
         )
         return react_agent, current_docs
