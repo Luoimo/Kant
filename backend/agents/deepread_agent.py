@@ -65,7 +65,11 @@ def _build_user_msg(query: str, book_source: str | None, memory_context: str) ->
 
 
 class DeepReadAgent:
-    """无状态 ReAct agent。每次 run() 构建独立工具闭包，支持多用户并发。"""
+    """无状态 ReAct agent。每次 run() 构建独立工具闭包，支持多用户并发。
+
+    HybridRetriever 作为类级缓存保存，BM25 索引跨请求复用。
+    上传新书后调用 invalidate_retriever() 清除 BM25 缓存。
+    """
 
     def __init__(
         self,
@@ -79,30 +83,52 @@ class DeepReadAgent:
         self.llm = llm or get_llm(temperature=0.2)
         self.config = config or DeepReadConfig()
         self._collection_name = collection_name or self.store.collection_name
+        self._retriever: HybridRetriever | None = None
+
+    def _get_retriever(self) -> HybridRetriever:
+        """懒初始化 HybridRetriever，上传新书后调用 invalidate_retriever() 重建。"""
+        if self._retriever is None:
+            hybrid_cfg = self.config.hybrid or HybridConfig(
+                fetch_k=self.config.fetch_k,
+                final_k=self.config.k,
+            )
+            self._retriever = HybridRetriever(
+                store=self.store,
+                collection_name=self._collection_name,
+                config=hybrid_cfg,
+                llm=self.llm,
+            )
+        return self._retriever
+
+    def invalidate_retriever(self) -> None:
+        """上传新书后调用，清除 BM25 缓存，下次检索时自动重建索引。"""
+        if self._retriever is not None:
+            self._retriever.invalidate_bm25()
+            logger.info("BM25 缓存已清除")
+
+    def _search_books_impl(
+        self,
+        search_query: str,
+        scope: str,
+        book_source: str | None,
+        chapter: str | None,
+    ) -> list[Document]:
+        """Core retrieval logic for search_books tool. Extracted for testability."""
+        filter_ = {"source": book_source} if (scope == "current_book" and book_source) else None
+        effective_query = f"{chapter} {search_query}" if chapter else search_query
+        return self._get_retriever().search(effective_query, filter=filter_)
 
     def _build(self, *, book_source: str | None, book_id: str):
         """Build a react_agent with bound tool closures. Returns (agent, current_docs)."""
         current_docs: list[Document] = []
-        store = self.store
         config = self.config
-        collection_name = self._collection_name
-        llm = self.llm
+        retriever = self._get_retriever()  # 复用类级缓存，BM25 跨请求复用
 
         @tool
         def search_book_content(search_query: str) -> str:
             """在用户本地书库中检索原文证据片段。
             输入精简的搜索关键词；证据不足时可换关键词再调用一次。
             """
-            hybrid_cfg = config.hybrid or HybridConfig(
-                fetch_k=config.fetch_k,
-                final_k=config.k,
-            )
-            retriever = HybridRetriever(
-                store=store,
-                collection_name=collection_name,
-                config=hybrid_cfg,
-                llm=llm,
-            )
             filter_ = {"source": book_source} if book_source else None
             docs = retriever.search(search_query, filter=filter_)
 
@@ -185,7 +211,7 @@ class DeepReadAgent:
 
         from langgraph.prebuilt import create_react_agent
         react_agent = create_react_agent(
-            llm,
+            self.llm,
             [search_book_content, recommend_books, get_reading_plan, update_reading_plan],
             prompt=_SYSTEM_PROMPT,
         )
@@ -199,12 +225,14 @@ class DeepReadAgent:
         book_id: str = "",
         memory_context: str = "",
         user_id: str = "default",
+        history: list[dict] | None = None,
     ) -> DeepReadResult:
-        logger.info("run user=%r query=%r source=%r", user_id, query, book_source)
+        logger.info("run user=%r query=%r source=%r history_len=%d", user_id, query, book_source, len(history or []))
         react_agent, current_docs = self._build(book_source=book_source, book_id=book_id)
         user_msg = _build_user_msg(query, book_source, memory_context)
+        history_msgs = [(m["role"], m["content"]) for m in (history or [])]
         result = react_agent.invoke(
-            {"messages": [("user", user_msg)]},
+            {"messages": [*history_msgs, ("user", user_msg)]},
             config={"recursion_limit": 8},
         )
         answer = result["messages"][-1].content
@@ -223,6 +251,7 @@ class DeepReadAgent:
         book_id: str = "",
         memory_context: str = "",
         user_id: str = "default",
+        history: list[dict] | None = None,
     ) -> AsyncGenerator[tuple[str, object], None]:
         """Async generator yielding (event_type, data) for SSE streaming.
 
@@ -230,12 +259,13 @@ class DeepReadAgent:
             ("token", str)  — incremental text chunk
             ("done", dict)  — final metadata: citations, docs_count
         """
-        logger.info("stream user=%r query=%r source=%r", user_id, query, book_source)
+        logger.info("stream user=%r query=%r source=%r history_len=%d", user_id, query, book_source, len(history or []))
         react_agent, current_docs = self._build(book_source=book_source, book_id=book_id)
         user_msg = _build_user_msg(query, book_source, memory_context)
+        history_msgs = [(m["role"], m["content"]) for m in (history or [])]
 
         async for event in react_agent.astream_events(
-            {"messages": [("user", user_msg)]},
+            {"messages": [*history_msgs, ("user", user_msg)]},
             config={"recursion_limit": 8},
             version="v2",
         ):
