@@ -76,16 +76,18 @@ class NoteService:
 
     def list_books(self) -> list[dict]:
         """返回已有笔记的书籍列表，含 book_id 和 title。"""
-        book_catalog = get_book_catalog()
-        result = []
-        for note in get_note_catalog().get_all():
-            book = book_catalog.get_by_id(note["book_id"])
-            result.append({
+        notes = get_note_catalog().get_all()
+        if not notes:
+            return []
+        books_by_id = get_book_catalog().get_all_by_id()
+        return [
+            {
                 "book_id": note["book_id"],
-                "title": book["title"] if book else note["book_id"],
+                "title": books_by_id.get(note["book_id"], {}).get("title", note["book_id"]),
                 "updated_at": note["updated_at"],
-            })
-        return result
+            }
+            for note in notes
+        ]
 
     def get_timeline(self, book_id: str | None = None) -> dict:
         """返回结构化元数据供前端时间轴可视化。"""
@@ -106,13 +108,14 @@ class NoteService:
             else get_note_catalog().get_all()
         )
         notes = [n for n in notes if n]
-        book_catalog = get_book_catalog()
+        if not notes:
+            return {"entries": [], "books": [], "concept_frequency": {}}
+        books_by_id = get_book_catalog().get_all_by_id()
         entries = []
         books = []
         for note in notes:
             bid = note["book_id"]
-            book = book_catalog.get_by_id(bid)
-            title = book["title"] if book else bid
+            title = books_by_id.get(bid, {}).get("title", bid)
             books.append(title)
             path = Path(note["file_path"])
             if not path.exists():

@@ -1,6 +1,6 @@
-"""SQLite-backed catalog for books, notes, and plans.
+"""SQLite-backed catalog for books and notes.
 
-All three share one DB file (data/books.db).
+Both share one DB file (data/books.db).
 File I/O stays in the agent/storage layer; this module only tracks metadata.
 """
 from __future__ import annotations
@@ -15,12 +15,10 @@ from typing import Iterator
 
 
 # ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # DDL
 # ---------------------------------------------------------------------------
+
+_initialized: set[str] = set()
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS books (
@@ -41,15 +39,6 @@ CREATE TABLE IF NOT EXISTS notes (
     file_path  TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS plans (
-    plan_id      TEXT PRIMARY KEY,
-    book_id      TEXT NOT NULL UNIQUE,
-    file_path    TEXT NOT NULL,
-    reading_goal TEXT NOT NULL DEFAULT '',
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS conversation_messages (
@@ -75,18 +64,21 @@ class _DB:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            for stmt in _DDL.strip().split(";"):
-                stmt = stmt.strip()
-                if stmt:
-                    conn.execute(stmt)
-            # Migration: add citations column for existing databases
-            try:
-                conn.execute(
-                    "ALTER TABLE conversation_messages ADD COLUMN citations TEXT NOT NULL DEFAULT '[]'"
-                )
-            except Exception:
-                pass  # column already exists
+        key = str(db_path)
+        if key not in _initialized:
+            with self._connect() as conn:
+                for stmt in _DDL.strip().split(";"):
+                    stmt = stmt.strip()
+                    if stmt:
+                        conn.execute(stmt)
+                # Migration: add citations column for existing databases
+                try:
+                    conn.execute(
+                        "ALTER TABLE conversation_messages ADD COLUMN citations TEXT NOT NULL DEFAULT '[]'"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+            _initialized.add(key)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -157,6 +149,12 @@ class BookCatalog(_DB):
             row = conn.execute("SELECT * FROM books WHERE source = ?", (source,)).fetchone()
         return dict(row) if row else None
 
+    def get_all_by_id(self) -> dict[str, dict]:
+        """Return all books keyed by book_id for O(1) batch lookups."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM books").fetchall()
+        return {r["book_id"]: dict(r) for r in rows}
+
 
 # ---------------------------------------------------------------------------
 # NoteCatalog
@@ -198,44 +196,6 @@ class NoteCatalog(_DB):
     def delete(self, book_id: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM notes WHERE book_id = ?", (book_id,))
-
-
-# ---------------------------------------------------------------------------
-# PlanCatalog
-# ---------------------------------------------------------------------------
-
-class PlanCatalog(_DB):
-    def upsert(self, *, book_id: str, file_path: str, reading_goal: str = "") -> None:
-        now = datetime.now(tz=timezone.utc).isoformat()
-        plan_id = str(_uuid.uuid4())
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO plans (plan_id, book_id, file_path, reading_goal, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(book_id) DO UPDATE SET
-                    file_path    = excluded.file_path,
-                    reading_goal = excluded.reading_goal,
-                    updated_at   = excluded.updated_at
-                """,
-                (plan_id, book_id, file_path, reading_goal, now, now),
-            )
-
-    def touch(self, book_id: str) -> None:
-        now = datetime.now(tz=timezone.utc).isoformat()
-        with self._connect() as conn:
-            conn.execute("UPDATE plans SET updated_at = ? WHERE book_id = ?", (now, book_id))
-
-    def get_by_book_id(self, book_id: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM plans WHERE book_id = ?", (book_id,)
-            ).fetchone()
-        return dict(row) if row else None
-
-    def delete(self, book_id: str) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM plans WHERE book_id = ?", (book_id,))
 
 
 # ---------------------------------------------------------------------------
@@ -337,15 +297,11 @@ def get_note_catalog() -> NoteCatalog:
     return NoteCatalog(_db_path())
 
 
-def get_plan_catalog() -> PlanCatalog:
-    return PlanCatalog(_db_path())
-
-
 def get_conversation_storage() -> ConversationStorage:
     return ConversationStorage(_db_path())
 
 
 __all__ = [
-    "BookCatalog", "NoteCatalog", "PlanCatalog", "ConversationStorage",
-    "get_book_catalog", "get_note_catalog", "get_plan_catalog", "get_conversation_storage",
+    "BookCatalog", "NoteCatalog", "ConversationStorage",
+    "get_book_catalog", "get_note_catalog", "get_conversation_storage",
 ]

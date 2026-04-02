@@ -36,9 +36,8 @@ class Settings(BaseSettings):
 
     # Mem0 记忆管理
     mem0_user_id: str = "kant-user"
-    # Note and plan storage
+    # 笔记文件存储目录
     note_storage_dir: str = "data/notes"
-    plan_storage_dir: str = "data/plans"
 
     # Single collection for all book chunks (agents read from here)
     books_collection_name: str = "kant_library"
