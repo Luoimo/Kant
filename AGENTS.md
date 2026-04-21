@@ -1,160 +1,203 @@
-# Everything Claude Code (ECC) — Agent Instructions
+# AAS Practice Module 项目要求总结
 
-This is a **production-ready AI coding plugin** providing 28 specialized agents, 125 skills, 60 commands, and automated hook workflows for software development.
+## 一、项目总体说明
 
-**Version:** 1.9.0
+- 本实践模块为 **100%项目制评估**
+- 无笔试考试
+- 目标：通过项目证明掌握以下四大能力：
+  - Explainable & Responsible AI
+  - AI Security
+  - Agentic AI 系统设计
+  - AI 系统集成与部署（MLSecOps / LLMSecOps）
 
-## Core Principles
+---
 
-1. **Agent-First** — Delegate to specialized agents for domain tasks
-2. **Test-Driven** — Write tests before implementation, 80%+ coverage required
-3. **Security-First** — Never compromise on security; validate all inputs
-4. **Immutability** — Always create new objects, never mutate existing ones
-5. **Plan Before Execute** — Plan complex features before writing code
+## 二、项目基本要求
 
-## Available Agents
+### 1. 团队要求
+- 每组 **4–5人**
+- 每人约 **15天工作量**
+- 项目周期跨数周（非连续）
 
-| Agent | Purpose | When to Use |
-|-------|---------|-------------|
-| planner | Implementation planning | Complex features, refactoring |
-| architect | System design and scalability | Architectural decisions |
-| tdd-guide | Test-driven development | New features, bug fixes |
-| code-reviewer | Code quality and maintainability | After writing/modifying code |
-| security-reviewer | Vulnerability detection | Before commits, sensitive code |
-| build-error-resolver | Fix build/type errors | When build fails |
-| e2e-runner | End-to-end Playwright testing | Critical user flows |
-| refactor-cleaner | Dead code cleanup | Code maintenance |
-| doc-updater | Documentation and codemaps | Updating docs |
-| docs-lookup | Documentation and API reference research | Library/API documentation questions |
-| cpp-reviewer | C++ code review | C++ projects |
-| cpp-build-resolver | C++ build errors | C++ build failures |
-| go-reviewer | Go code review | Go projects |
-| go-build-resolver | Go build errors | Go build failures |
-| kotlin-reviewer | Kotlin code review | Kotlin/Android/KMP projects |
-| kotlin-build-resolver | Kotlin/Gradle build errors | Kotlin build failures |
-| database-reviewer | PostgreSQL/Supabase specialist | Schema design, query optimization |
-| python-reviewer | Python code review | Python projects |
-| java-reviewer | Java and Spring Boot code review | Java/Spring Boot projects |
-| java-build-resolver | Java/Maven/Gradle build errors | Java build failures |
-| chief-of-staff | Communication triage and drafts | Multi-channel email, Slack, LINE, Messenger |
-| loop-operator | Autonomous loop execution | Run loops safely, monitor stalls, intervene |
-| harness-optimizer | Harness config tuning | Reliability, cost, throughput |
-| rust-reviewer | Rust code review | Rust projects |
-| rust-build-resolver | Rust build errors | Rust build failures |
-| pytorch-build-resolver | PyTorch runtime/CUDA/training errors | PyTorch build/training failures |
-| typescript-reviewer | TypeScript/JavaScript code review | TypeScript/JavaScript projects |
+### 2. 项目来源
+项目可来自：
+- 公司实际问题
+- 自主创意
+- 外部来源
 
-## Agent Orchestration
+要求：
+> 必须能体现课程所学的关键技能
 
-Use agents proactively without user prompt:
-- Complex feature requests → **planner**
-- Code just written/modified → **code-reviewer**
-- Bug fix or new feature → **tdd-guide**
-- Architectural decision → **architect**
-- Security-sensitive code → **security-reviewer**
-- Multi-channel communication triage → **chief-of-staff**
-- Autonomous loops / loop monitoring → **loop-operator**
-- Harness config reliability and cost → **harness-optimizer**
+---
 
-Use parallel execution for independent operations — launch multiple agents simultaneously.
+## 三、核心技术要求（必须覆盖）
 
-## Security Guidelines
+项目必须是一个 **Agentic AI 系统**，并包含：
 
-**Before ANY commit:**
-- No hardcoded secrets (API keys, passwords, tokens)
-- All user inputs validated
-- SQL injection prevention (parameterized queries)
-- XSS prevention (sanitized HTML)
-- CSRF protection enabled
-- Authentication/authorization verified
-- Rate limiting on all endpoints
-- Error messages don't leak sensitive data
+### 1. 多智能体系统（Agentic AI）
+- 多个Agent协作
+- 明确分工（如：决策、检索、执行等）
+- 支持通信与协调机制
 
-**Secret management:** NEVER hardcode secrets. Use environment variables or a secret manager. Validate required secrets at startup. Rotate any exposed secrets immediately.
+---
 
-**If security issue found:** STOP → use security-reviewer agent → fix CRITICAL issues → rotate exposed secrets → review codebase for similar issues.
+### 2. Explainable & Responsible AI
+- 可解释性（Explainability）
+- 公平性（Fairness）
+- 偏见控制（Bias Mitigation）
+- 治理与合规（Governance）
 
-## Coding Style
+---
 
-**Immutability (CRITICAL):** Always create new objects, never mutate. Return new copies with changes applied.
+### 3. AI 安全（AI Security）
+必须识别并应对：
+- Prompt Injection
+- Hallucination
+- Adversarial Inputs
 
-**File organization:** Many small files over few large ones. 200-400 lines typical, 800 max. Organize by feature/domain, not by type. High cohesion, low coupling.
+需提供：
+- 风险分析
+- 缓解措施
 
-**Error handling:** Handle errors at every level. Provide user-friendly messages in UI code. Log detailed context server-side. Never silently swallow errors.
+---
 
-**Input validation:** Validate all user input at system boundaries. Use schema-based validation. Fail fast with clear messages. Never trust external data.
+### 4. 系统架构设计
+需具备：
+- Logical Architecture（逻辑架构）
+- Physical Architecture（物理架构）
+- 模块化设计
+- 数据流设计
 
-**Code quality checklist:**
-- Functions small (<50 lines), files focused (<800 lines)
-- No deep nesting (>4 levels)
-- Proper error handling, no hardcoded values
-- Readable, well-named identifiers
+---
 
-## Testing Requirements
+### 5. MLSecOps / LLMSecOps
+需体现完整工程流程：
+- CI/CD
+- 自动测试（含AI安全测试）
+- 模型版本管理
+- Logging & Monitoring
 
-**Minimum coverage: 80%**
+---
 
-Test types (all required):
-1. **Unit tests** — Individual functions, utilities, components
-2. **Integration tests** — API endpoints, database operations
-3. **E2E tests** — Critical user flows
+## 四、项目流程与交付物
 
-**TDD workflow (mandatory):**
-1. Write test first (RED) — test should FAIL
-2. Write minimal implementation (GREEN) — test should PASS
-3. Refactor (IMPROVE) — verify coverage 80%+
+### 1. Project Proposal（开题报告）
 
-Troubleshoot failures: check test isolation → verify mocks → fix implementation (not tests, unless tests are wrong).
+需包含：
 
-## Development Workflow
+- 项目标题
+- 项目成员
+- 项目背景与问题定义
+- Agent设计与系统范围
+- 技术考虑（安全 / explainability 等）
+- 工作分解结构（WBS）与工时估算
 
-1. **Plan** — Use planner agent, identify dependencies and risks, break into phases
-2. **TDD** — Use tdd-guide agent, write tests first, implement, refactor
-3. **Review** — Use code-reviewer agent immediately, address CRITICAL/HIGH issues
-4. **Capture knowledge in the right place**
-   - Personal debugging notes, preferences, and temporary context → auto memory
-   - Team/project knowledge (architecture decisions, API changes, runbooks) → the project's existing docs structure
-   - If the current task already produces the relevant docs or code comments, do not duplicate the same information elsewhere
-   - If there is no obvious project doc location, ask before creating a new top-level file
-5. **Commit** — Conventional commits format, comprehensive PR summaries
+---
 
-## Git Workflow
+### 2. Progress Report（每两周）
 
-**Commit format:** `<type>: <description>` — Types: feat, fix, refactor, docs, test, chore, perf, ci
+内容包括：
 
-**PR workflow:** Analyze full commit history → draft comprehensive summary → include test plan → push with `-u` flag.
+- 已完成工作
+- 每人投入时间
+- 遇到的问题
+- 下阶段计划
 
-## Architecture Patterns
+命名格式：
+---
 
-**API response format:** Consistent envelope with success indicator, data payload, error message, and pagination metadata.
+### 3. 最终交付
 
-**Repository pattern:** Encapsulate data access behind standard interface (findAll, findById, create, update, delete). Business logic depends on abstract interface, not storage mechanism.
+#### （1）Group Project Report
 
-**Skeleton projects:** Search for battle-tested templates, evaluate with parallel agents (security, extensibility, relevance), clone best match, iterate within proven structure.
+必须包含：
 
-## Performance
+- Executive Summary
+- System Overview
+- System Architecture
+- Agent Design（逐个说明）
+- Explainable & Responsible AI 实践
+- AI Security Risk Register
+- MLSecOps / LLMSecOps Pipeline
+- Testing Summary
+- Reflection
 
-**Context management:** Avoid last 20% of context window for large refactoring and multi-file features. Lower-sensitivity tasks (single edits, docs, simple fixes) tolerate higher utilization.
+---
 
-**Build troubleshooting:** Use build-error-resolver agent → analyze errors → fix incrementally → verify after each fix.
+#### （2）Individual Report
 
-## Project Structure
+每人负责一个 Agent：
 
-```
-agents/          — 28 specialized subagents
-skills/          — 117 workflow skills and domain knowledge
-commands/        — 60 slash commands
-hooks/           — Trigger-based automations
-rules/           — Always-follow guidelines (common + per-language)
-scripts/         — Cross-platform Node.js utilities
-mcp-configs/     — 14 MCP server configurations
-tests/           — Test suite
-```
+内容包括：
 
-## Success Metrics
+- Agent设计
+- 实现细节
+- 测试方法与结果
+- 安全与可解释性
+- 个人反思
 
-- All tests pass with 80%+ coverage
-- No security vulnerabilities
-- Code is readable and maintainable
-- Performance is acceptable
-- User requirements are met
+#### （3）Presentation & Demo
+
+需展示：
+
+- 系统整体架构
+- Agent协作流程
+- 实际运行效果
+- 关键场景演示
+
+---
+
+## 五、评分标准
+
+### 总体结构
+- 团队：50%
+- 个人：50%
+
+---
+
+### 团队评分（50%）
+- Presentation：20%
+- Project Report：30%
+
+---
+
+### 个人评分（50%）
+- Agent设计：10–13%
+- 实现与测试：10–13%
+- 个人反思：10–14%
+- Peer Assessment：10%
+
+---
+
+## 六、Peer Assessment（同伴评分）
+
+- 必须对队友进行排名（不可重复）
+- 未提交将得0分
+- 不以工时为标准，而是以贡献为标准
+
+---
+
+## 七、通过要求
+
+- Individual 部分 ≥ 20%
+- Overall ≥ 50%
+- 平均 ≥ 60% 才有资格申请硕士项目
+
+---
+
+## 八、项目成功关键点（重点）
+
+评估重点在于：
+
+- 多Agent是否真正协作
+- 是否具备完整系统架构
+- 是否考虑AI安全问题
+- 是否体现Explainable AI原则
+- 是否具备工程落地能力
+
+---
+
+## 九、一句话总结
+
+> 本项目的本质不是“做一个AI功能”，  
+> 而是“设计并实现一个可落地的AI系统”。

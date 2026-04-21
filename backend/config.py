@@ -47,6 +47,23 @@ class Settings(BaseSettings):
     book_catalog_db: str = "data/books.db"
     covers_dir: str = "data/covers"
 
+    # LangSmith / LLMSecOps
+    langchain_tracing_v2: str = "false"
+    langchain_endpoint: str = "https://api.smith.langchain.com"
+    langchain_api_key: str = ""
+    langchain_project: str = "Kant"
+
+    # Lakera Guard
+    lakera_guard_api_key: str = ""
+
 
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    
+    # 将 LangSmith 配置注入到环境变量，供 LangChain 底层自动读取
+    import os
+    os.environ["LANGCHAIN_TRACING_V2"] = settings.langchain_tracing_v2
+    os.environ["LANGCHAIN_ENDPOINT"] = settings.langchain_endpoint
+    os.environ["LANGCHAIN_API_KEY"] = settings.langchain_api_key
+    os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
+    return settings

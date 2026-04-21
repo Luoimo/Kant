@@ -15,15 +15,17 @@ class LLMReranker:
 
     无需额外依赖，直接复用项目已有的 OpenAI 客户端。
     适合哲学/社科文本：LLM 能理解语义而非仅关键词匹配。
+    增加了最低分数阈值（防幻觉），如果文档分数过低将被直接过滤。
     """
 
-    def __init__(self, llm=None) -> None:
+    def __init__(self, llm=None, min_score: float = 3.0) -> None:
         from backend.llm.openai_client import get_llm
         self._llm = llm or get_llm(temperature=0.0)
+        self.min_score = min_score
 
     def rerank(self, query: str, docs: list[Document], top_k: int) -> list[Document]:
-        if len(docs) <= top_k:
-            return docs
+        if not docs:
+            return []
 
         numbered = "\n\n".join(
             f"[{i + 1}] {doc.page_content[:500]}" for i, doc in enumerate(docs)
@@ -31,7 +33,7 @@ class LLMReranker:
         prompt = (
             f"你是一位哲学文献相关性评估专家。\n"
             f"问题：{query}\n\n"
-            f"请为以下每个候选段落与该问题的相关性打分（0-10整数），"
+            f"请为以下每个候选段落与该问题的相关性打分（0-10整数，0表示完全无关，10表示能完美回答问题），"
             f"只输出如下格式，每行一个：\n"
             f"1: 分数\n2: 分数\n...\n\n"
             f"候选段落：\n{numbered}"
@@ -43,7 +45,9 @@ class LLMReranker:
             )
             content = getattr(msg, "content", str(msg))
             scores = _parse_scores(content, len(docs))
-            ranked = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
+            # 过滤掉分数过低的文档（防幻觉第一道防线）
+            valid_pairs = [(d, s) for d, s in zip(docs, scores) if s >= self.min_score]
+            ranked = sorted(valid_pairs, key=lambda x: x[1], reverse=True)
             return [doc for doc, _ in ranked[:top_k]]
         except Exception as exc:
             logger.warning("LLMReranker 失败（%s），按原顺序截断", exc)

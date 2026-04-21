@@ -8,14 +8,15 @@ from fastapi.staticfiles import StaticFiles
 from backend.api.chat import router as chat_router
 from backend.api.books import router as books_router
 from backend.api.notes import router as notes_router
-from backend.api.reader import router as reader_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from backend.agents.deepread_agent import DeepReadAgent
     from backend.agents.note_agent import NoteAgent
-    from backend.agents.plan_editor import PlanEditor
+    from backend.agents.followup_agent import FollowupAgent
+    from backend.agents.router_agent import RouterAgent
+    from backend.agents.critic_agent import CriticAgent
     from backend.memory.mem0_store import Mem0Store
     from backend.storage.note_vector_store import make_note_vector_store
     from backend.config import get_settings
@@ -23,9 +24,11 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     note_vector_store = make_note_vector_store(settings)
 
-    app.state.agent = DeepReadAgent()
+    app.state.agent = DeepReadAgent(note_vector_store=note_vector_store)
     app.state.note_agent = NoteAgent(note_vector_store=note_vector_store)
-    app.state.plan_editor = PlanEditor()
+    app.state.followup_agent = FollowupAgent()
+    app.state.router_agent = RouterAgent()
+    app.state.critic_agent = CriticAgent()
     app.state.mem0 = Mem0Store()
 
     print("[main] app started")
@@ -46,7 +49,6 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(books_router)
 app.include_router(notes_router)
-app.include_router(reader_router)
 
 # Serve extracted cover images
 _covers_dir = Path("data/covers")

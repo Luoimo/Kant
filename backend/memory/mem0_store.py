@@ -118,7 +118,7 @@ class Mem0Store:
         try:
             raw = self._client.search(
                 query=query,
-                user_id=self._user_id,
+                filters={"user_id": self._user_id},
                 limit=top_k,
             )
             logger.debug("Mem0 search 原始返回类型=%s 内容=%s", type(raw).__name__, raw)

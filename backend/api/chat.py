@@ -12,9 +12,7 @@ router = APIRouter(tags=["chat"])
 
 _TOOL_STATUS: dict[str, str] = {
     "search_book_content": "正在检索书籍内容…",
-    "recommend_books": "正在查看书库…",
-    "get_reading_plan": "正在读取阅读计划…",
-    "update_reading_plan": "正在保存阅读计划…",
+    "search_past_notes": "正在回顾历史笔记…",
 }
 
 
@@ -33,6 +31,7 @@ class ChatResponse(BaseModel):
     citations: list[dict[str, Any]]
     retrieved_docs_count: int
     intent: str | None
+    followups: list[str] = []
 
 
 def _resolve_book(book_id: str) -> tuple[str | None, str]:
@@ -76,15 +75,19 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
     agent = request.app.state.agent
     mem0 = request.app.state.mem0
     note_agent = request.app.state.note_agent
+    followup_agent = getattr(request.app.state, "followup_agent", None)
+    router_agent = getattr(request.app.state, "router_agent", None)
+    critic_agent = getattr(request.app.state, "critic_agent", None)
 
-    from backend.security.input_filter import run_input_safety_check
-    safety = run_input_safety_check(req.query)
+    from backend.security.input_filter import run_lakera_guard_check
+    safety = run_lakera_guard_check(req.query)
     if not safety.allowed:
         return ChatResponse(
             answer=f"当前请求未通过安全检查：{safety.reason}",
             citations=[],
             retrieved_docs_count=0,
             intent=None,
+            followups=[],
         )
 
     book_id = req.book_id or ""
@@ -109,11 +112,16 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
         except Exception as exc:
             print(f"[chat] mem0 save failed: {exc}")
 
+    followups = []
+    if followup_agent and result.answer:
+        followups = followup_agent.generate(req.query, result.answer)
+
     return ChatResponse(
         answer=result.answer,
         citations=[c.__dict__ for c in result.citations],
         retrieved_docs_count=len(result.retrieved_docs),
         intent=req.active_tab or "deepread",
+        followups=followups,
     )
 
 
@@ -125,9 +133,12 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
     agent = request.app.state.agent
     mem0 = request.app.state.mem0
     note_agent = request.app.state.note_agent
+    followup_agent = getattr(request.app.state, "followup_agent", None)
+    router_agent = getattr(request.app.state, "router_agent", None)
+    critic_agent = getattr(request.app.state, "critic_agent", None)
 
-    from backend.security.input_filter import run_input_safety_check
-    safety = run_input_safety_check(req.query)
+    from backend.security.input_filter import run_lakera_guard_check
+    safety = run_lakera_guard_check(req.query)
     if not safety.allowed:
         async def _denied():
             yield f"data: {json.dumps({'type': 'error', 'message': safety.reason})}\n\n"
@@ -141,11 +152,23 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
     async def event_generator():
         answer_parts: list[str] = []
         docs_count = 0
+        docs_text = ""
+        
+        # 1. 预处理路由阶段 (RouterAgent)
+        optimized_query = query
+        if router_agent:
+            yield f"data: {json.dumps({'type': 'status', 'text': '正在识别意图…'}, ensure_ascii=False)}\n\n"
+            route_info = await router_agent.aroute(req.query)
+            if route_info.get("intent") == "book_qa":
+                optimized_query = _build_query(ChatRequest(**{**req.model_dump(), "query": route_info["optimized_query"]}), book_title)
+        
         # Signal immediately so the frontend can drop the typing indicator
         yield f"data: {json.dumps({'type': 'thinking'}, ensure_ascii=False)}\n\n"
+        
+        # 2. 主查询阶段 (DeepReadAgent)
         try:
             async for event_type, data in agent.astream_events(
-                query=query,
+                query=optimized_query,
                 book_source=book_source,
                 book_id=book_id,
                 memory_context=memory_ctx,
@@ -159,13 +182,24 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                     yield f"data: {json.dumps({'type': 'status', 'text': label}, ensure_ascii=False)}\n\n"
                 elif event_type == "done":
                     docs_count = data["docs_count"]
+                    # 将检索到的证据拼起来供后续 Critic 使用
+                    docs_text = "\n".join([c.get("snippet", "") for c in data.get("citations", [])])
                     yield f"data: {json.dumps({'type': 'done', 'citations': data['citations'], 'docs_count': docs_count}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
             return
 
-        # Post-stream side effects — fire and forget
         full_answer = "".join(answer_parts)
+
+        # 3. 后置评估阶段 (CriticAgent) - 直接向用户流式追加评估结果
+        if critic_agent and full_answer:
+            try:
+                async for critic_chunk in critic_agent.aevaluate(req.query, docs_text, full_answer):
+                    yield f"data: {json.dumps({'type': 'token', 'text': critic_chunk}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                print(f"[chat] critic failed: {e}")
+
+        # Post-stream side effects — fire and forget
         tasks: list = []
         if book_title and docs_count > 0:
             tasks.append(asyncio.to_thread(
@@ -173,8 +207,14 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
             ))
         if mem0 and full_answer:
             tasks.append(asyncio.to_thread(mem0.add_qa, req.query, full_answer))
+        
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+        if followup_agent and full_answer:
+            followups = await followup_agent.agenerate(req.query, full_answer)
+            if followups:
+                yield f"data: {json.dumps({'type': 'followup', 'questions': followups}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),

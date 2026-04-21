@@ -38,20 +38,14 @@ _SYSTEM_PROMPT = """\
 
 工具说明：
 - search_book_content  : 在用户本地书库检索原文证据。回答书中内容问题时必须调用。
-- recommend_books      : 获取用户已有书单，然后你基于自身知识推荐新书。
-- get_reading_plan     : 查看当前书籍的阅读计划。
-- update_reading_plan  : 保存修改后的阅读计划。修改计划时先调 get_reading_plan，\
-生成新内容后再调此工具保存。
+- search_past_notes    : 检索用户的历史读书笔记。当用户询问以前的思考、或者需要跨书串联知识时调用。
 
-工作原则：
-1. 书中内容问答 — 必须有 search_book_content 的证据支撑，不编造书中事实
-2. 书籍推荐 — 先调 recommend_books 获取已有书单，再用你的知识推荐新书
-3. 计划查看/修改 — get_reading_plan 读，update_reading_plan 写
+工作原则（防幻觉与客观性要求）：
+1. 书中内容问答 — 必须有 search_book_content 的证据支撑。如果检索到的证据不足以回答问题，你必须明确回答『根据书本内容，无法直接回答该问题』或『书中未提及相关内容』，绝对不要使用外部知识编造或猜测书中事实（Hallucination Mitigation）。
+2. 解释概念与跨书对比（公平性与偏见控制） — 在解释哲学概念或做跨书观点对比时，必须体现多元化（Diversity），涵盖不同文化背景、流派或视角的观点，避免单一维度的偏见（Bias Mitigation），确保内容客观公平（Fairness）。
 
 输出格式：
 - 内容问答：结构化回答 + 末尾「引用」小节（书名·章节）
-- 书籍推荐：每本用 ### 书名（作者）开头，含推荐理由和难度
-- 计划：展示完整 Markdown
 """
 
 
@@ -74,11 +68,13 @@ class DeepReadAgent:
         collection_name: str | None = None,
         llm=None,
         config: DeepReadConfig | None = None,
+        note_vector_store=None,
     ) -> None:
         self.store = store or ChromaStore()
         self.llm = llm or get_llm(temperature=0.2)
         self.config = config or DeepReadConfig()
         self._collection_name = collection_name or self.store.collection_name
+        self._note_vector_store = note_vector_store
 
     def _build(self, *, book_source: str | None, book_id: str):
         """Build a react_agent with bound tool closures. Returns (agent, current_docs)."""
@@ -130,63 +126,31 @@ class DeepReadAgent:
             return sep.join(blocks)
 
         @tool
-        def recommend_books(topic: str = "") -> str:
-            """获取用户本地书库已有书单，以便推荐时避免重复。
-            调用后请基于你的训练知识为用户推荐新书。
-            topic: 推荐主题或关键词（可为空）。
+        def search_past_notes(query: str) -> str:
+            """检索用户的历史读书笔记。
+            当用户询问“我之前记过什么”、“关于某某概念我以前有什么想法”，或你需要跨书串联知识时调用。
             """
+            if not self._note_vector_store:
+                return "笔记系统未启用，无法检索。"
             try:
-                from backend.storage.book_catalog import get_book_catalog
-                books = get_book_catalog().get_all()
-                if not books:
-                    return "用户本地书库为空，可自由推荐。"
-                lines = [f"- 《{b['title']}》（{b['author']}）" for b in books[:15]]
-                header = f"用户已有书库（共{len(books)}本），推荐时请避免重复：\n"
-                suffix = "\n\n请基于你的知识，为用户推荐与话题相关的、书库中尚未有的书籍。"
-                return header + "\n".join(lines) + suffix
+                results = self._note_vector_store.search_similar(text=query, exclude_book="", top_k=3)
+                if not results:
+                    return "未在历史笔记中找到相关记录。"
+                lines = []
+                for i, r in enumerate(results, 1):
+                    book = r.get("book_title", "未知书籍")
+                    summary = r.get("question_summary", "")
+                    concepts = ", ".join(r.get("concepts", []))
+                    date = r.get("date", "")[:10]
+                    lines.append(f"[笔记{i}] 《{book}》({date}): {summary} (涉及概念: {concepts})")
+                return "找到以下历史笔记记录：\n" + "\n".join(lines)
             except Exception as e:
-                return f"书库查询失败：{e}，请直接基于你的知识推荐。"
-
-        @tool
-        def get_reading_plan() -> str:
-            """查看当前书籍的阅读计划。修改计划前必须先调用此工具。"""
-            if not book_id:
-                return "当前未打开具体书籍，无法查看计划。"
-            try:
-                from backend.storage.book_catalog import get_plan_catalog
-                record = get_plan_catalog().get_by_book_id(book_id)
-                if not record:
-                    return "该书暂无阅读计划，请先在 Reader 模式中打开该书自动生成计划。"
-                path = Path(record["file_path"])
-                return path.read_text(encoding="utf-8") if path.exists() else "计划文件不存在。"
-            except Exception as e:
-                return f"加载计划失败：{e}"
-
-        @tool
-        def update_reading_plan(updated_content: str) -> str:
-            """将修改后的完整阅读计划 Markdown 保存到文件。
-            必须先调用 get_reading_plan 查看原计划，再生成完整新内容后调用此工具。
-            updated_content: 完整的新计划 Markdown 文本。
-            """
-            if not book_id:
-                return "当前未打开具体书籍，无法保存计划。"
-            try:
-                from backend.storage.book_catalog import get_plan_catalog
-                record = get_plan_catalog().get_by_book_id(book_id)
-                if not record:
-                    return "该书暂无计划记录，无法保存。请先在 Reader 模式中初始化。"
-                path = Path(record["file_path"])
-                path.write_text(updated_content, encoding="utf-8")
-                get_plan_catalog().touch(book_id)
-                logger.info("plan updated for book_id=%r", book_id)
-                return "计划已保存。"
-            except Exception as e:
-                return f"保存计划失败：{e}"
+                return f"笔记检索失败：{e}"
 
         from langgraph.prebuilt import create_react_agent
         react_agent = create_react_agent(
             llm,
-            [search_book_content, recommend_books, get_reading_plan, update_reading_plan],
+            [search_book_content, search_past_notes],
             prompt=_SYSTEM_PROMPT,
         )
         return react_agent, current_docs

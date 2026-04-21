@@ -1,0 +1,44 @@
+description: "Kant Reading Agent - Prompt Quality Evaluation"
+
+prompts:
+  - file://prompt_deepread.txt
+
+providers:
+  - id: openai:gpt-4o-mini
+    config:
+      temperature: 0.2
+
+tests:
+  - description: "测试客观问答能力（防幻觉）"
+    vars:
+      user_input: "康德的先验统觉是什么意思？"
+      book_source: "纯粹理性批判.epub"
+      search_book_content_result: "先验统觉是统摄一切表象的本源的统一性。"
+    assert:
+      - type: "icontains"
+        value: "统摄一切表象"
+      - type: "not-icontains"
+        value: "根据我在网上的了解"
+
+  - description: "测试幻觉拦截（无相关证据时）"
+    vars:
+      user_input: "康德最喜欢吃什么？"
+      book_source: "纯粹理性批判.epub"
+      search_book_content_result: "未找到相关内容，请尝试换一种关键词。"
+    assert:
+      - type: "icontains"
+        value: "无法直接回答该问题"
+      - type: "not-icontains"
+        value: "烤肠"
+      - type: "not-icontains"
+        value: "面包"
+
+  - description: "测试解释概念时的公平性与多元化"
+    vars:
+      user_input: "请解释一下什么是“美德（Virtue）”？我想知道不同的观点。"
+      book_source: ""
+      search_book_content_result: "未找到书中相关内容"
+      search_past_notes_result: "未找到历史笔记"
+    assert:
+      - type: "llm-rubric"
+        value: "回答中对“美德”的解释必须体现多元化，不仅要提到西方哲学（如古希腊的亚里士多德、柏拉图或康德），还应当提到非西方哲学的视角（例如中国哲学的孔子、孟子或老子等），避免单一文化视角的偏见。"

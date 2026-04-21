@@ -76,20 +76,33 @@ class Chroma:
             logger.debug(
                 "Chroma 使用 CloudClient（tenant=%s, database=%s）", tenant, database
             )
-            self._client = chromadb.CloudClient(
-                tenant=tenant,
-                database=database,
-                api_key=api_key,
-            )
+            # 在使用 CloudClient 时，先尝试连接，如果租户/数据库不存在则给个友好提示并回退
+            try:
+                self._client = chromadb.CloudClient(
+                    tenant=tenant,
+                    database=database,
+                    api_key=api_key,
+                )
+                self._collection = self._client.get_or_create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+            except Exception as e:
+                logger.error(f"Chroma Cloud 初始化失败: {e}。将回退到本地存储。")
+                Path(persist_directory).mkdir(parents=True, exist_ok=True)
+                self._client = chromadb.PersistentClient(path=persist_directory)
+                self._collection = self._client.get_or_create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
         else:
             logger.debug("Chroma 使用 PersistentClient（path=%s）", persist_directory)
             Path(persist_directory).mkdir(parents=True, exist_ok=True)
             self._client = chromadb.PersistentClient(path=persist_directory)
-
-        self._collection = self._client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+            self._collection = self._client.get_or_create_collection(
+                name=collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
 
     # --- 写入 ---
 
