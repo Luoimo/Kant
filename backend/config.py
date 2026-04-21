@@ -5,6 +5,7 @@
 # @Project:Kant
 
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     openai_api_key: str = ""
-    openai_base_url: str | None = "https://api.openai.com/v1"
+    openai_base_url: Optional[str] = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
     chroma_persist_dir: str = "data/chroma"

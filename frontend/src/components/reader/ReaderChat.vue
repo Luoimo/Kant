@@ -92,7 +92,7 @@ async function send() {
           updateAiMsg({ content: base + text, isStatus: false })
           if (loading.value) loading.value = false
         },
-        onDone: (evt) => updateAiMsg({ citations: evt.citations ?? [], streaming: false }),
+        onDone: (evt) => updateAiMsg({ citations: evt.citations ?? [], followups: evt.followups ?? [], streaming: false }),
         onError: (msg) => updateAiMsg({ content: `请求失败：${msg}`, isError: true, isStatus: false, streaming: false }),
       },
     )
@@ -170,6 +170,17 @@ function clearMessages() {
               >
                 {{ c.source || c.book_title }}
               </span>
+            </div>
+            <!-- Followups -->
+            <div v-if="msg.followups && msg.followups.length && !msg.streaming" class="followups">
+              <button
+                v-for="(f, i) in msg.followups"
+                :key="'f'+i"
+                class="followup-btn"
+                @click="inputText = f; send()"
+              >
+                {{ f }}
+              </button>
             </div>
           </div>
         </div>
@@ -378,6 +389,34 @@ blockquote.quoted-text {
   padding: 2px 7px;
   border-radius: 4px;
   font-weight: 500;
+}
+
+/* ── Followups ── */
+.followups {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.followup-btn {
+  align-self: flex-start;
+  background: white;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+
+.followup-btn:hover {
+  background: var(--bg);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ── Typing indicator ── */

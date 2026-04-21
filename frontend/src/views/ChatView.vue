@@ -134,6 +134,17 @@ const SUGGESTIONS = [
                   {{ c.source || c.book_title }}
                 </span>
               </div>
+              <!-- Followups -->
+              <div v-if="msg.followups && msg.followups.length && !msg.streaming" class="followups">
+                <button
+                  v-for="(f, i) in msg.followups"
+                  :key="'f'+i"
+                  class="followup-btn"
+                  @click="inputText = f; send()"
+                >
+                  {{ f }}
+                </button>
+              </div>
             </div>
           </div>
         </TransitionGroup>
@@ -345,6 +356,34 @@ const SUGGESTIONS = [
   border-radius: 4px;
   font-weight: 500;
   cursor: default;
+}
+
+/* ── Followups ── */
+.followups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.followup-btn {
+  align-self: flex-start;
+  background: white;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 6px 14px;
+  border-radius: 16px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+
+.followup-btn:hover {
+  background: var(--bg);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ── Typing indicator ── */

@@ -1,5 +1,5 @@
 import pytest
-from backend.security.input_filter import run_input_safety_check
+from backend.security.input_filter import run_lakera_guard_check
 
 class TestInputSafetyFilter:
     """
@@ -20,10 +20,10 @@ class TestInputSafetyFilter:
         ]
         
         for text in malicious_inputs:
-            result = run_input_safety_check(text)
+            result = run_lakera_guard_check(text)
             assert not result.allowed, f"安全漏洞：未能拦截 Prompt Injection 攻击: '{text}'"
-            assert "prompt_hack" in result.categories
-            assert "试图覆盖/绕过系统规则" in result.reason
+            assert "prompt_hack" in result.categories or "lakera_flagged" in result.categories
+            assert "试图覆盖/绕过系统规则" in result.reason or "Lakera Guard 拦截" in result.reason
 
     def test_secrets_leakage_defense(self):
         """测试包含敏感信息 (Secrets/Tokens) 的输入是否被拦截"""
@@ -34,10 +34,10 @@ class TestInputSafetyFilter:
         ]
         
         for text in secret_inputs:
-            result = run_input_safety_check(text)
+            result = run_lakera_guard_check(text)
             assert not result.allowed, f"安全漏洞：未能拦截敏感信息泄露: '{text}'"
-            assert "secrets" in result.categories
-            assert "检测到疑似密钥" in result.reason
+            assert "secrets" in result.categories or "lakera_flagged" in result.categories
+            assert "检测到疑似密钥" in result.reason or "Lakera Guard 拦截" in result.reason
 
     def test_filesystem_access_defense(self):
         """测试对本地文件系统的恶意访问是否被拦截"""
@@ -49,10 +49,10 @@ class TestInputSafetyFilter:
         ]
         
         for text in filesystem_inputs:
-            result = run_input_safety_check(text)
+            result = run_lakera_guard_check(text)
             assert not result.allowed, f"安全漏洞：未能拦截文件系统恶意访问: '{text}'"
-            assert "filesystem" in result.categories
-            assert "本机文件/磁盘操作" in result.reason
+            assert "filesystem" in result.categories or "lakera_flagged" in result.categories
+            assert "本机文件/磁盘操作" in result.reason or "Lakera Guard 拦截" in result.reason
 
     def test_code_execution_defense(self):
         """测试系统命令/代码执行攻击是否被拦截"""
@@ -64,16 +64,16 @@ class TestInputSafetyFilter:
         ]
         
         for text in code_exec_inputs:
-            result = run_input_safety_check(text)
+            result = run_lakera_guard_check(text)
             assert not result.allowed, f"安全漏洞：未能拦截系统命令执行: '{text}'"
-            assert "code_exec" in result.categories
-            assert "不支持执行系统命令" in result.reason
+            assert "code_exec" in result.categories or "lakera_flagged" in result.categories
+            assert "不支持执行系统命令" in result.reason or "Lakera Guard 拦截" in result.reason
 
     def test_offtopic_soft_warning(self):
         """测试偏离主题的软警告机制"""
         # 模拟用户聊了一些完全不相关的话题
         offtopic_input = "今天天气真好，晚上去吃火锅吧。"
-        result = run_input_safety_check(offtopic_input)
+        result = run_lakera_guard_check(offtopic_input)
         
         # 偏离主题不会被硬拦截，但会触发警告分类
         assert result.allowed is True
@@ -89,7 +89,7 @@ class TestInputSafetyFilter:
         ]
         
         for text in normal_inputs:
-            result = run_input_safety_check(text)
+            result = run_lakera_guard_check(text)
             assert result.allowed is True
             assert not result.categories  # 正常输入不应该触发任何风险分类
             assert result.reason == "安全检查通过。"

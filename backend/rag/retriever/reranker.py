@@ -26,6 +26,8 @@ class LLMReranker:
     def rerank(self, query: str, docs: list[Document], top_k: int) -> list[Document]:
         if not docs:
             return []
+        if len(docs) <= top_k:
+            return docs
 
         numbered = "\n\n".join(
             f"[{i + 1}] {doc.page_content[:500]}" for i, doc in enumerate(docs)

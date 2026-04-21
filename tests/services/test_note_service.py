@@ -5,8 +5,17 @@ import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
+import pytest
 
 from backend.services.note_service import NoteService
+
+
+@pytest.fixture(autouse=True)
+def mock_db_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "backend.storage.book_catalog._db_path",
+        lambda: tmp_path / "books.db",
+    )
 
 
 def _make_service(tmp_path, vector_store=None) -> NoteService:

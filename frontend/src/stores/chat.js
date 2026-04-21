@@ -41,7 +41,7 @@ export const useChatStore = defineStore('chat', () => {
             updateAiMsg({ content: base + text, isStatus: false })
             if (loading.value) loading.value = false
           },
-          onDone: (evt) => updateAiMsg({ citations: evt.citations ?? [], streaming: false }),
+          onDone: (evt) => updateAiMsg({ citations: evt.citations ?? [], followups: evt.followups ?? [], streaming: false }),
           onError: (msg) => updateAiMsg({ content: `请求失败：${msg}`, isError: true, isStatus: false, streaming: false }),
         },
       )

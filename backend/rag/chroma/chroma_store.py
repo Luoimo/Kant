@@ -372,6 +372,58 @@ class ChromaStore:
         return len(ids)
 
     # ------------------------------------------------------------------
+    # 公开：元数据查询接口
+    # ------------------------------------------------------------------
+
+    def list_sources(self) -> list[str]:
+        """列出库中所有去重后的 source 文件名。"""
+        collection = self._db._collection
+        result = collection.get(include=["metadatas"])
+        metadatas = result.get("metadatas") or []
+        sources = set()
+        for m in metadatas:
+            if m is None:
+                continue
+            src = m.get("source")
+            if src:
+                sources.add(src)
+        return sorted(list(sources))
+
+    def list_book_titles(self) -> list[dict[str, str]]:
+        """列出库中所有书籍的元数据（去重）。"""
+        sources = self.list_sources()
+        books = []
+        collection = self._db._collection
+        for src in sources:
+            result = collection.get(where={"source": src}, limit=1, include=["metadatas"])
+            metas = result.get("metadatas")
+            if metas and metas[0]:
+                m = metas[0]
+                books.append({
+                    "book_title": str(m.get("book_title", "")),
+                    "author": str(m.get("author", "")),
+                    "source": str(m.get("source", "")),
+                    "book_id": str(m.get("book_id", ""))
+                })
+        return books
+
+    def resolve_book_by_id(self, book_id: str) -> dict[str, str] | None:
+        """根据 book_id 查找书籍元数据。"""
+        collection = self._db._collection
+        result = collection.get(where={"book_id": book_id}, limit=1, include=["metadatas"])
+        metas = result.get("metadatas")
+        if metas and metas[0]:
+            m = metas[0]
+            if str(m.get("book_id", "")) == book_id:
+                return {
+                    "book_title": str(m.get("book_title", "")),
+                    "author": str(m.get("author", "")),
+                    "source": str(m.get("source", "")),
+                    "book_id": str(m.get("book_id", ""))
+                }
+        return None
+
+    # ------------------------------------------------------------------
     # 公开：检索接口
     # ------------------------------------------------------------------
 
