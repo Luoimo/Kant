@@ -1,6 +1,37 @@
-# Kant — 读书 AI 助手
+# Kant — 读书 AI 助手 (Agentic AI System)
 
-基于 **OpenAI + ChromaDB + LangGraph** 构建的本地读书 Agent 系统，支持 EPUB 书籍的精读问答、笔记整理、书单推荐和阅读计划，具备多轮对话与长期记忆能力。
+**Kant** 是一个基于 **Agentic AI** 架构设计的深度阅读系统。本项目作为 **AAS Practice Module** 的落地实践，旨在超越单一的“AI 功能”调用，构建一个具备多智能体协作、安全可靠、且具备完整工程化落地的 **Agentic AI 系统**。
+
+通过上传 EPUB 书籍，Kant 能够为用户提供沉浸式的精读问答、结构化的笔记整理、个性化的书单推荐以及科学的阅读计划管理，同时支持多轮对话与长期记忆。
+
+---
+
+## 核心能力与项目特色 (AAS 模块实践)
+
+本项目严格遵循项目要求，全面覆盖以下四大核心能力：
+
+### 1. Agentic AI 系统设计 (多智能体协作)
+系统采用了清晰的 **Router + 专家/评估/后处理 Agent** 架构编排，确保阅读问答场景的高效与严谨。
+- **明确分工**：拥有五个专门的执行 Agent：前端路由分类（RouterAgent）、精读问答检索（DeepReadAgent）、后置客观性与幻觉评估（CriticAgent）、笔记提炼整理（NoteAgent）、以及引导思考（FollowupAgent）。
+- **通信与协调**：采用经典的 Agent 协作模式（Supervisor/Critic 机制与 Hook 机制）。例如，用户提问首先由 RouterAgent 进行意图识别和查询重写优化，然后由 DeepReadAgent 基于 RAG 进行回答，回答结束后同步触发 CriticAgent 进行事实核查，同时触发 NoteAgent 提炼笔记、FollowupAgent 生成追问。
+- **状态管理**：结合 **Mem0** 实现跨会话的用户长期记忆（阅读偏好、知识背景等）。
+
+### 2. AI Security (大模型安全防御)
+全面识别并缓解大模型应用中的核心风险：
+- **Prompt Injection 与 Adversarial Inputs**：接入 **Lakera Guard** 企业级安全网关（并在本地内置正则兜底规则），有效拦截越狱（Jailbreak）、提示词注入以及恶意系统指令。
+- **敏感信息泄露与系统越权**：拦截尝试在对话中输出 API Key/Token 的行为，严格限制文件系统访问和代码执行请求。
+- **Hallucination（幻觉控制）**：采用高级 **RAG 混合检索架构**（BM25 + ChromaDB 向量 + RRF 融合 + LLM Reranker），强制 Agent **严格基于检索到的原文片段**进行回答，大幅降低幻觉。
+
+### 3. Explainable & Responsible AI (可解释性与负责任的 AI)
+- **Explainability (可解释性)**：所有来自精读的回答都会附带精确的 **Citations (引用来源)**，并在前端 UI 清晰标明原文出处（书名与章节片段），确保 AI 的回答过程透明、可追溯。
+- **Governance & Off-topic Control (治理与控制)**：通过输入过滤器实现“软警告”机制，当用户讨论与“阅读/精读”完全无关的话题时，系统会温和提示，确保 AI 助手保持其核心用途。
+
+### 4. MLSecOps / LLMSecOps (系统集成与自动化部署)
+具备完整的现代工程化开发流水线：
+- **CI/CD 流水线**：通过 GitHub Actions 配置了自动化的构建与测试流程。
+- **自动化测试**：拥有近 200 个单元与集成测试（Pytest），覆盖核心逻辑。
+- **AI 安全测试 (Security Tests)**：单独设立安全测试模块，每次提交自动验证防御机制（Prompt Injection、文件访问等）是否依然生效，防止安全规则退化。
+- **系统架构设计**：Vue.js / Vite 前端配合 FastAPI 高性能异步后端，采用高度模块化的数据流设计（SQLite 管理元数据，ChromaDB 管理向量，本地存储管理 Markdown 笔记）。
 
 ---
 
@@ -9,15 +40,14 @@
 ```
 EPUB → EpubExtractor → TextCleaner → TextChunker → OpenAI Embeddings → ChromaDB
                                                                            ↓
-用户问题 → FastAPI /chat → OrchestratorAgent (LangGraph)
+用户问题 → FastAPI /chat → RouterAgent（意图分类 & 查询优化）
                                ├─ Mem0 长期记忆检索
                                ├─ InputSafetyFilter（每轮安全检查）
-                               ├─ 意图识别（LLM 结构化输出，支持多 Agent 串联）
-                               └─ 路由到子 Agent：
-                                   ├─ DeepReadAgent      精读问答（证据引用）
-                                   ├─ NoteAgent          笔记整理（持久化）
-                                   ├─ ReadingPlanAgent   阅读计划（持久化）
-                                   └─ RecommendationAgent 书籍推荐（LLM 知识）
+                               └─ 核心问答流：
+                                   ├─ DeepReadAgent（主流程：基于 RAG 检索回答，附带证据引用）
+                                   ├─ CriticAgent（评估流：同步进行事实核查与客观性审查）
+                                   ├─ NoteAgent（后处理：自动提炼问答生成结构化笔记并持久化）
+                                   └─ FollowupAgent（后处理：根据对话生成深入追问问题）
 ```
 
 ---
@@ -27,11 +57,11 @@ EPUB → EpubExtractor → TextCleaner → TextChunker → OpenAI Embeddings →
 ```
 backend/
   agents/
-    orchestrator_agent.py  LangGraph 图 + Supervisor 逻辑
-    deepread_agent.py      精读问答 Agent
-    note_agent.py          笔记 Agent
-    plan_editor.py         阅读计划 Agent（generate + ReAct edit/extend）
-    recommendation_agent.py 书籍推荐 Agent
+    router_agent.py        前端路由 Agent，负责意图分类和查询重写优化
+    deepread_agent.py      精读问答 Agent，基于检索内容生成带引用的回答
+    critic_agent.py        评论员 Agent，事实核查与客观性评估（防止幻觉）
+    note_agent.py          笔记整理 Agent，将问答提炼为结构化笔记并持久化
+    followup_agent.py      追问 Agent，在一轮问答结束后生成相关引导问题
   api/
     chat.py                POST /chat, POST /books/upload, GET /books
     reader.py              Reader Mode 端点（init/plan/progress）
@@ -224,37 +254,43 @@ curl -X POST http://localhost:8000/chat \
 
 ## 核心功能说明
 
-### 四种 Agent
+### 五大核心 Agent
 
-#### DeepReadAgent — 精读问答
-从书库中检索最相关的段落，严格基于原文回答，每条回答附带章节引用。使用混合检索（BM25 + 向量 + RRF 融合 + LLM 重排）确保检索质量。
+为了让你更容易理解，我们把这个系统想象成一个“阅读工作小组”，每个人（Agent）有自己明确的分工：
 
-#### NoteAgent — 笔记整理
-支持 4 种笔记格式：`structured`（结构化）/ `summary`（摘要）/ `qa`（问答）/ `timeline`（时间线）。支持 `new`（新建）/ `edit`（编辑）/ `extend`（追加）操作，笔记以 Markdown 文件存储在 `data/notes/`。
+#### 1. RouterAgent（路由主管）
+**它的工作**：就像医院的导诊台。
+当你发出一句话时，它会先判断你是在“闲聊”还是在“认真提问”。如果是认真提问，它会帮你把问题“翻译”得更专业，方便后面去书里找答案。
 
-#### RecommendationAgent — 书籍推荐
-基于大模型自身知识推荐书籍，不局限于本地书库，可以推荐用户尚未上传的书。多轮对话中自动避免重复推荐。
+#### 2. DeepReadAgent（精读专员）
+**它的工作**：核心答疑老师。
+它会去书里翻找最相关的段落，然后严格按照书里的原文来回答你的问题。为了证明它没有胡说八道，它的每一句话都会附带上引用的原文出处。
 
-#### PlanEditor — 阅读计划
-两种工作路径：
-- **generate()** — Reader Mode 打开书时自动调用：从 ChromaDB 分页获取全部 chunk 提取章节结构（section_title 优先），按 300字/分钟 计算时长，调用 LLM 生成建议日程，写入 `data/plans/{book_id}.md`，注册到 `PlanCatalog`
-- **run()** — 聊天中触发 edit/extend：使用 LangGraph ReAct agent，通过 `load_existing_plan` / `get_chapter_structure` 工具修改计划
+#### 3. CriticAgent（事实核查评论员）
+**它的工作**：专门挑刺的质检员。
+在精读专员给出回答后，它会悄悄在旁边检查：“这个回答客观吗？是不是有偏见？书里真的这么说了吗？”如果发现问题，它会给你发一个小小的“审查笔记”来补充客观视角，防止 AI 产生幻觉。
 
-### 多 Agent 串联
+#### 4. NoteAgent（笔记小助手）
+**它的工作**：自动整理笔记。
+你不需要每次问完问题都手动记笔记。每次问答结束后，它会自动从你们的对话里提炼出“核心要点”和“关键概念”，并帮你整整齐齐地写进这本专属的笔记文档里。
 
-一句话可以触发多个 Agent 依次工作：
+#### 5. FollowupAgent（引导思考员）
+**它的工作**：启发式提问。
+回答完你的问题后，它会根据刚才聊的内容，顺势给你提出 3 个有启发性的小问题，引导你进一步深入思考。
 
-```
-"推荐一本海德格尔的书，并帮我制定阅读计划"
-  → RecommendationAgent 推荐《存在与时间》
-  → ReadingPlanAgent 为《存在与时间》生成阅读计划
-  → finalize 节点合并两个结果为一份完整回答
-```
+### 多 Agent 协作流水线
 
-```
-"帮我分析康德范畴演绎，然后整理成笔记"
-  → DeepReadAgent 精读检索
-  → NoteAgent 基于精读上下文生成笔记
+简单来说，你只问了一句话，但系统后台其实有一群人在协同工作：
+
+```text
+你问："康德的先验统觉是什么？"
+
+流水线开始：
+1. 【路由主管】 识别出这是个专业问题，优化了查询词。
+2. 【精读专员】 拿着词去书里找答案，并生成了带引用的解释。
+3. 【质检员】   (同步进行) 检查这个解释是否客观、严谨。
+4. 【笔记助手】 (同步进行) 把这轮精彩问答浓缩成笔记存了起来。
+5. 【引导员】   (同步进行) 顺势抛出 3 个更深入的问题供你继续探讨。
 ```
 
 ### 多轮对话
