@@ -53,4 +53,5 @@ reference
 frontend/node_modules
 
 .history/
-.idea/.venv312/
+.idea/
+.venv312/
