@@ -20,13 +20,16 @@ jobs:
       - name: Basic Syntax Check
         run: |
           python -m pip install flake8
-          flake8 backend tests --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics || true
 
   # 2. 后端核心功能测试
   backend-core-tests:
     name: Backend Core Tests
     needs: prepare-and-lint
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -42,21 +45,24 @@ jobs:
       - name: Run Core Tests
         env:
           PYTHONPATH: .
-        run: pytest tests/ --ignore=tests/security --cov=backend --cov-report=xml --junitxml=core-results.xml
+        run: pytest tests/ --ignore=tests/security --cov=. --cov-report=xml --junitxml=core-results.xml
       - name: Upload Results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: core-test-results
           path: |
-            core-results.xml
-            coverage.xml
+            backend/core-results.xml
+            backend/coverage.xml
 
   # 3. AI 安全测试 (MLSecOps)
   backend-security-tests:
     name: AI Security Tests
     needs: prepare-and-lint
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -78,7 +84,7 @@ jobs:
         if: always()
         with:
           name: security-test-results
-          path: security-results.xml
+          path: backend/security-results.xml
 
   # 4. 前端构建与测试
   frontend-build:
