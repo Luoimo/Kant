@@ -11,8 +11,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.storage.book_catalog import get_note_catalog, get_book_catalog
-from backend.utils.text import safe_id
+from storage.book_catalog import get_note_catalog, get_book_catalog
+from utils.text import safe_id
 
 
 class NoteService:

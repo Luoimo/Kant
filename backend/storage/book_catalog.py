@@ -222,7 +222,7 @@ class PlanCatalog(_DB):
 # ---------------------------------------------------------------------------
 
 def _db_path() -> Path:
-    from backend.config import get_settings
+    from config import get_settings
     return Path(get_settings().book_catalog_db)
 
 

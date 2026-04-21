@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from backend.rag.extracter.epub_extractor import (
+from rag.extracter.epub_extractor import (
     EpubExtractor, BookContent, SectionContent, TOCEntry,
     build_section_map,
 )

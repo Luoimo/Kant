@@ -5,7 +5,7 @@ import logging
 
 from langchain_core.documents import Document
 
-from backend.utils.text import tokenize
+from utils.text import tokenize
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ from unstructured.cleaners.core import (
     replace_unicode_quotes,
 )
 
-from backend.rag.extracter.epub_extractor import (
+from rag.extracter.epub_extractor import (
     BookContent,
     SectionContent,
     TOCEntry,

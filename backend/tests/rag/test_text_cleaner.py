@@ -2,11 +2,11 @@
 """TextCleaner 单元测试"""
 from __future__ import annotations
 import pytest
-from backend.rag.cleaner.text_cleaner import (
+from rag.cleaner.text_cleaner import (
     TextCleaner, CleanConfig,
     CleanedSection, CleanedBookContent,
 )
-from backend.rag.extracter.epub_extractor import SectionContent, BookContent
+from rag.extracter.epub_extractor import SectionContent, BookContent
 
 
 class TestCleanSection:

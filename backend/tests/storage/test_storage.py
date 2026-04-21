@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
-from backend.storage.note_storage import LocalNoteStorage
-from backend.storage.plan_storage import LocalPlanStorage
+from storage.note_storage import LocalNoteStorage
+from storage.plan_storage import LocalPlanStorage
 
 
 class TestLocalNoteStorage:

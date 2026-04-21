@@ -4,7 +4,7 @@ import re
 from typing import Dict, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from backend.llm.openai_client import get_llm
+from llm.openai_client import get_llm
 
 logger = logging.getLogger(__name__)
 

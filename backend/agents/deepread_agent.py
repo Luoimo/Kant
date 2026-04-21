@@ -10,10 +10,10 @@ from typing import AsyncGenerator
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 
-from backend.llm.openai_client import get_llm
-from backend.rag.chroma.chroma_store import ChromaStore
-from backend.rag.retriever import HybridConfig, HybridRetriever
-from backend.xai.citation import Citation, build_citations
+from llm.openai_client import get_llm
+from rag.chroma.chroma_store import ChromaStore
+from rag.retriever import HybridConfig, HybridRetriever
+from xai.citation import Citation, build_citations
 
 sep = "\n\n"
 

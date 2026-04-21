@@ -3,7 +3,7 @@ import json
 from typing import AsyncGenerator
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from backend.llm.openai_client import get_llm
+from llm.openai_client import get_llm
 
 logger = logging.getLogger(__name__)
 

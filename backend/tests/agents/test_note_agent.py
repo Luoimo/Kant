@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from backend.agents.note_agent import NoteAgent, NoteEntry
+from agents.note_agent import NoteAgent, NoteEntry
 
 _FAKE_QUESTION = "先验感性论中时间和空间为什么是直观形式？"
 _FAKE_ANSWER = "时间和空间是主体感知世界的先天框架，不依赖经验，与牛顿绝对时空观根本不同。"

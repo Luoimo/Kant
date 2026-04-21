@@ -78,7 +78,7 @@ class Mem0Store:
     """
 
     def __init__(self) -> None:
-        from backend.config import get_settings
+        from config import get_settings
         s = get_settings()
         # 配置项
         config = {

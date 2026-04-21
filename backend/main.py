@@ -5,21 +5,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.api.chat import router as chat_router
-from backend.api.books import router as books_router
-from backend.api.notes import router as notes_router
+from api.chat import router as chat_router
+from api.books import router as books_router
+from api.notes import router as notes_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from backend.agents.deepread_agent import DeepReadAgent
-    from backend.agents.note_agent import NoteAgent
-    from backend.agents.followup_agent import FollowupAgent
-    from backend.agents.router_agent import RouterAgent
-    from backend.agents.critic_agent import CriticAgent
-    from backend.memory.mem0_store import Mem0Store
-    from backend.storage.note_vector_store import make_note_vector_store
-    from backend.config import get_settings
+    from agents.deepread_agent import DeepReadAgent
+    from agents.note_agent import NoteAgent
+    from agents.followup_agent import FollowupAgent
+    from agents.router_agent import RouterAgent
+    from agents.critic_agent import CriticAgent
+    from memory.mem0_store import Mem0Store
+    from storage.note_vector_store import make_note_vector_store
+    from config import get_settings
 
     settings = get_settings()
     note_vector_store = make_note_vector_store(settings)

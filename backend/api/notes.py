@@ -6,10 +6,10 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.config import get_settings
-from backend.services.note_service import NoteService
-from backend.storage.book_catalog import get_book_catalog
-from backend.storage.note_vector_store import make_note_vector_store
+from config import get_settings
+from services.note_service import NoteService
+from storage.book_catalog import get_book_catalog
+from storage.note_vector_store import make_note_vector_store
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 

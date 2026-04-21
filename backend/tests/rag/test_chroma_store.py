@@ -28,12 +28,12 @@ from langchain_core.documents import Document
 
 import uuid as _uuid
 
-from backend.rag.chroma.chroma_store import (
+from rag.chroma.chroma_store import (
     ChromaStore,
     IngestConfig,
     IngestResult,
 )
-from backend.rag.chunker.text_chunker import ChunkMeta, TextChunk
+from rag.chunker.text_chunker import ChunkMeta, TextChunk
 from tests.rag.conftest import make_chunk, SAMPLE_TITLE, SAMPLE_AUTHOR
 
 
@@ -66,11 +66,11 @@ def store(tmp_path, mock_db, monkeypatch):
     初始化 ChromaStore，完全 mock 掉 get_embeddings 和 Chroma 构造函数。
     """
     monkeypatch.setattr(
-        "backend.rag.chroma.chroma_store.get_embeddings",
+        "rag.chroma.chroma_store.get_embeddings",
         lambda: MagicMock(),
     )
     monkeypatch.setattr(
-        "backend.rag.chroma.chroma_store.Chroma",
+        "rag.chroma.chroma_store.Chroma",
         lambda **kwargs: mock_db,
     )
     s = ChromaStore(
@@ -465,15 +465,15 @@ class TestIngest:
             lambda c: (call_order.append("chunk"), mock_chunks)[1]
 
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.EpubExtractor",
+            "rag.chroma.chroma_store.EpubExtractor",
             lambda path: mock_extractor_instance,
         )
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.TextCleaner",
+            "rag.chroma.chroma_store.TextCleaner",
             lambda cfg: mock_cleaner_instance,
         )
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.TextChunker",
+            "rag.chroma.chroma_store.TextChunker",
             lambda cfg: mock_chunker_instance,
         )
 
@@ -491,15 +491,15 @@ class TestIngest:
         mock_content = MagicMock(sections=[])
         mock_content.metadata = {"title": "Test Book", "author": "Test Author"}
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.EpubExtractor",
+            "rag.chroma.chroma_store.EpubExtractor",
             lambda path: MagicMock(extract=lambda: mock_content),
         )
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.TextCleaner",
+            "rag.chroma.chroma_store.TextCleaner",
             lambda cfg: MagicMock(clean_content=lambda c: MagicMock(sections=[])),
         )
         monkeypatch.setattr(
-            "backend.rag.chroma.chroma_store.TextChunker",
+            "rag.chroma.chroma_store.TextChunker",
             lambda cfg: MagicMock(chunk_content=lambda c: mock_chunks),
         )
         epub_path = tmp_path / "fake.epub"
@@ -534,7 +534,7 @@ class TestResolveDb:
         def fake_chroma(**kwargs):
             return new_db if kwargs.get("collection_name") == "other_col" else original_db
 
-        monkeypatch.setattr("backend.rag.chroma.chroma_store.Chroma", fake_chroma)
+        monkeypatch.setattr("rag.chroma.chroma_store.Chroma", fake_chroma)
         resolved = store._resolve_db("other_col")
         assert resolved is new_db
 
@@ -548,15 +548,15 @@ def _mock_pipeline(monkeypatch, epub_path, mock_chunks):
     mock_content = MagicMock(sections=[])
     mock_content.metadata = {"title": "Test Book", "author": "Test Author"}
     monkeypatch.setattr(
-        "backend.rag.chroma.chroma_store.EpubExtractor",
+        "rag.chroma.chroma_store.EpubExtractor",
         lambda path: MagicMock(extract=lambda: mock_content),
     )
     monkeypatch.setattr(
-        "backend.rag.chroma.chroma_store.TextCleaner",
+        "rag.chroma.chroma_store.TextCleaner",
         lambda cfg: MagicMock(clean_content=lambda c: MagicMock(sections=[])),
     )
     monkeypatch.setattr(
-        "backend.rag.chroma.chroma_store.TextChunker",
+        "rag.chroma.chroma_store.TextChunker",
         lambda cfg: MagicMock(chunk_content=lambda c: mock_chunks),
     )
 

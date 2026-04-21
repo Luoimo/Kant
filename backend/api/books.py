@@ -7,10 +7,10 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend.config import get_settings
-from backend.rag.chroma.chroma_store import ChromaStore
-from backend.rag.extracter.epub_extractor import EpubExtractor
-from backend.storage.book_catalog import get_book_catalog
+from config import get_settings
+from rag.chroma.chroma_store import ChromaStore
+from rag.extracter.epub_extractor import EpubExtractor
+from storage.book_catalog import get_book_catalog
 
 router = APIRouter(prefix="/books", tags=["books"])
 

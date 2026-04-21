@@ -19,7 +19,7 @@ class LLMReranker:
     """
 
     def __init__(self, llm=None, min_score: float = 3.0) -> None:
-        from backend.llm.openai_client import get_llm
+        from llm.openai_client import get_llm
         self._llm = llm or get_llm(temperature=0.0)
         self.min_score = min_score
 

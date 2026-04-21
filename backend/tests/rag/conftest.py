@@ -10,11 +10,11 @@ from __future__ import annotations
 import pytest
 from ebooklib import epub
 
-from backend.rag.extracter.epub_extractor import (
+from rag.extracter.epub_extractor import (
     SectionContent, BookContent, TOCEntry,
 )
-from backend.rag.cleaner.text_cleaner import CleanedSection, CleanedBookContent
-from backend.rag.chunker.text_chunker import TextChunk, ChunkMeta
+from rag.cleaner.text_cleaner import CleanedSection, CleanedBookContent
+from rag.chunker.text_chunker import TextChunk, ChunkMeta
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -200,7 +200,7 @@ def make_chunk(
     section_indices: list[int] | None = None,
     chunk_index: int = 0,
 ) -> TextChunk:
-    from backend.rag.chunker.text_chunker import _sha256_id
+    from rag.chunker.text_chunker import _sha256_id
     return TextChunk(
         chunk_id=_sha256_id(text),
         text=text,

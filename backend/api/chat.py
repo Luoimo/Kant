@@ -38,7 +38,7 @@ def _resolve_book(book_id: str) -> tuple[str | None, str]:
     """Return (book_source, book_title) for a given book_id."""
     if not book_id:
         return None, ""
-    from backend.storage.book_catalog import get_book_catalog
+    from storage.book_catalog import get_book_catalog
     meta = get_book_catalog().get_by_id(book_id)
     if not meta:
         return None, ""
@@ -79,7 +79,7 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
     router_agent = getattr(request.app.state, "router_agent", None)
     critic_agent = getattr(request.app.state, "critic_agent", None)
 
-    from backend.security.input_filter import run_lakera_guard_check
+    from security.input_filter import run_lakera_guard_check
     safety = run_lakera_guard_check(req.query)
     if not safety.allowed:
         return ChatResponse(
@@ -137,7 +137,7 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
     router_agent = getattr(request.app.state, "router_agent", None)
     critic_agent = getattr(request.app.state, "critic_agent", None)
 
-    from backend.security.input_filter import run_lakera_guard_check
+    from security.input_filter import run_lakera_guard_check
     safety = run_lakera_guard_check(req.query)
     if not safety.allowed:
         async def _denied():

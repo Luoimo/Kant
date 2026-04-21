@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.storage.note_storage import _LocalMarkdownStorage
+from storage.note_storage import _LocalMarkdownStorage
 
 
 class LocalPlanStorage(_LocalMarkdownStorage):

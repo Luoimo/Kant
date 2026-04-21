@@ -19,10 +19,10 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from backend.config import get_settings
-from backend.llm.openai_client import get_llm
-from backend.storage.book_catalog import get_note_catalog
-from backend.utils.text import safe_id
+from config import get_settings
+from llm.openai_client import get_llm
+from storage.book_catalog import get_note_catalog
+from utils.text import safe_id
 
 logger = logging.getLogger(__name__)
 

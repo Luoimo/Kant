@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from backend.llm.openai_client import get_llm
+from llm.openai_client import get_llm
 
 logger = logging.getLogger(__name__)
 

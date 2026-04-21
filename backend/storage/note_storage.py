@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 
-from backend.utils.text import tokenize
+from utils.text import tokenize
 
 
 

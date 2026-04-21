@@ -6,7 +6,7 @@
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-from backend.config import get_settings
+from config import get_settings
 
 
 def get_llm(**kwargs):

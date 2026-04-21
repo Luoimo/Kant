@@ -16,11 +16,11 @@ from typing import Any
 import chromadb
 from langchain_core.documents import Document
 
-from backend.config import get_settings
-from backend.llm.openai_client import get_embeddings
-from backend.rag.chunker.text_chunker import ChunkConfig, TextChunk, TextChunker
-from backend.rag.cleaner.text_cleaner import CleanConfig, TextCleaner
-from backend.rag.extracter.epub_extractor import EpubExtractor
+from config import get_settings
+from llm.openai_client import get_embeddings
+from rag.chunker.text_chunker import ChunkConfig, TextChunk, TextChunker
+from rag.cleaner.text_cleaner import CleanConfig, TextCleaner
+from rag.extracter.epub_extractor import EpubExtractor
 
 logger = logging.getLogger(__name__)
 

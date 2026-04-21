@@ -1,5 +1,5 @@
 import pytest
-from backend.security.input_filter import run_lakera_guard_check
+from security.input_filter import run_lakera_guard_check
 
 class TestInputSafetyFilter:
     """

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Literal, Sequence
 
-from backend.rag.cleaner.text_cleaner import CleanedBookContent, CleanedSection
+from rag.cleaner.text_cleaner import CleanedBookContent, CleanedSection
 
 logger = logging.getLogger(__name__)
 

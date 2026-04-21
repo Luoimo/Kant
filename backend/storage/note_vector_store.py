@@ -11,8 +11,8 @@ from typing import Any
 
 import chromadb
 
-from backend.config import get_settings
-from backend.llm.openai_client import get_embeddings
+from config import get_settings
+from llm.openai_client import get_embeddings
 
 
 class NoteVectorStore:

@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from langchain_core.messages import HumanMessage, SystemMessage
-from backend.llm.openai_client import get_llm
+from llm.openai_client import get_llm
 
 logger = logging.getLogger(__name__)
 

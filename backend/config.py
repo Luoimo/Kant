@@ -11,14 +11,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from dotenv import load_dotenv
 
-# 项目根目录（Kant），便于从任意 cwd 加载 .env
-_ROOT = Path(__file__).resolve().parent.parent
+# backend 目录，便于从后端目录加载 .env
+_BACKEND_DIR = Path(__file__).resolve().parent
 # 加载环境变量
-load_dotenv()
+load_dotenv(dotenv_path=_BACKEND_DIR / ".env")
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=_ROOT / ".env",
+        env_file=_BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
