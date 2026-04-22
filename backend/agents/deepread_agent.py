@@ -5,8 +5,7 @@ import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from langchain_core.documents import Document
 from langchain_core.tools import tool
@@ -18,7 +17,13 @@ from rag.retriever import HybridConfig, HybridRetriever
 from xai.citation import Citation, build_citations
 
 sep = "\n\n"
-_GRAPH_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{2,}|[\u4e00-\u9fff]{2,}")
+_CHINESE_TEXT_RE = re.compile(r"[\u4e00-\u9fff]+")
+_ENGLISH_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{2,}")
+_STOP_TERMS = {
+    "角色", "分析", "介绍", "评价", "解读", "理解", "看法",
+    "人物", "为什么", "怎么", "如何", "关系", "结局",
+    "意义", "作用", "特点", "性格", "是什么", "哪些",
+}
 
 
 @dataclass(frozen=True)
@@ -34,11 +39,13 @@ class DeepReadConfig:
     fetch_k: int = 20
     max_evidence: int = 8
     hybrid: HybridConfig | None = None
-    enable_graph_expansion: bool = True
-    max_graph_terms: int = 8
+    enable_graph_retrieval: bool = True
+    graph_seed_top_k: int = 6
+    graph_expand_top_k: int = 10
+    graph_chunk_k: int = 24
 
 
-_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT_BASE = """\
 你是"阅读助手"，帮助用户深度理解哲学和社科书籍。
 
 工具说明：
@@ -52,6 +59,22 @@ _SYSTEM_PROMPT = """\
 输出格式：
 - 内容问答：结构化回答 + 末尾「引用」小节（书名·章节）
 """
+
+_GRAPH_AWARE_APPENDIX = """\
+Graph-aware 证据融合规则（当 search_book_content 返回图结构块时生效）：
+1. 你会同时收到两类证据：
+   - [证据i]：向量检索命中的原文片段（可直接引用的文本证据）。
+   - [图检索子图]：图谱结构信息（种子节点/扩散节点/关联章节/关系路径），用于关系推理与上下文补全。
+2. 证据职责分工：
+   - 事实性表述、原话、细节优先依赖 [证据i]。
+   - 关系、依赖、层级、角色互动优先依赖 [图检索子图]。
+3. 若两类证据不一致：
+   - 明确指出差异；
+   - 不要编造不存在于任一证据源的信息；
+   - 优先采用可被原文片段直接验证的结论。
+4. 输出时若使用了图结构推理，需单独给出「图结构依据」小节，避免把结构推理伪装成原文引用。
+"""
+_SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE + _GRAPH_AWARE_APPENDIX
 
 
 def _build_user_msg(query: str, book_source: str | None, memory_context: str) -> str:
@@ -89,65 +112,78 @@ class DeepReadAgent:
         collection_name = self._collection_name
         llm = self.llm
 
+        def _clean_chinese_phrase(text: str) -> list[str]:
+            candidates: set[str] = set()
+            text = text.strip()
+            if len(text) < 2:
+                return []
+
+            candidates.add(text)
+
+            cleaned = text
+            for stop in sorted(_STOP_TERMS, key=len, reverse=True):
+                cleaned = cleaned.replace(stop, "")
+            cleaned = cleaned.strip()
+            if len(cleaned) >= 2:
+                candidates.add(cleaned)
+
+            return list(candidates)
+
         def _extract_graph_terms(query: str) -> list[str]:
-            terms: list[str] = []
-            for matched in _GRAPH_TERM_RE.findall(query or ""):
-                term = matched.strip()
-                if len(term) < 2:
-                    continue
-                terms.append(term)
-            out: list[str] = []
+            query = (query or "").strip()
+            if not query:
+                return []
+
+            mentions: list[str] = []
+            for m in _ENGLISH_TERM_RE.findall(query):
+                mentions.append(m.strip())
+            for chunk in _CHINESE_TEXT_RE.findall(query):
+                mentions.extend(_clean_chinese_phrase(chunk))
+
+            def _score(x: str) -> tuple[int, str]:
+                return (len(x), x)
+
+            uniq: list[str] = []
             seen: set[str] = set()
-            for t in terms:
-                k = t.lower()
-                if k not in seen:
-                    seen.add(k)
-                    out.append(t)
-            return out[:20]
+            for m in sorted(mentions, key=_score):
+                key = m.lower()
+                if key not in seen and len(m) >= 2:
+                    seen.add(key)
+                    uniq.append(m)
 
-        def _expand_query_with_graph(query: str) -> tuple[str, list[str]]:
-            if not config.enable_graph_expansion or not book_id:
-                return query, []
+            return uniq[:20]
 
-            terms = _extract_graph_terms(query)
-            print(f"_expand_query_with_graph extracted terms: {terms} from query: {query}")
+        def _graph_retrieve_subgraph(search_query: str) -> dict[str, Any]:
+            if not config.enable_graph_retrieval or not book_id:
+                return {"seed_entities": [], "expanded_entities": [], "chapter_titles": [], "reasoning_paths": []}
+            terms = _extract_graph_terms(search_query)
             if not terms:
-                return query, []
-
-            graph_ctx = get_neo4j_store().router_context(
+                return {"seed_entities": [], "expanded_entities": [], "chapter_titles": [], "reasoning_paths": []}
+            return get_neo4j_store().graph_retrieve_chunks(
                 book_id=book_id,
                 query_terms=terms,
-                recent_concepts=[],
+                seed_top_k=config.graph_seed_top_k,
+                expand_top_k=config.graph_expand_top_k,
+                chapter_limit=config.graph_chunk_k,
             )
-            matched = graph_ctx.get("matched_concepts") or []
-            related = graph_ctx.get("related_concepts") or []
-            chapters = graph_ctx.get("chapters") or []
 
-            expansion: list[str] = []
-            for item in matched + related:
-                s = str(item).strip()
-                if s and s.lower() not in {q.lower() for q in terms} and s not in expansion:
-                    expansion.append(s)
-                if len(expansion) >= config.max_graph_terms:
-                    break
-            print(f"expansion: {expansion}, chapters: {chapters}, matched: {matched}, related:{related}")
-            chapter_hints: list[str] = []
-            for ch in chapters[:3]:
-                title = str((ch or {}).get("chapter") or "").strip()
-                if title:
-                    chapter_hints.append(title)
-
-            if not expansion and not chapter_hints:
-                return query, []
-
-            suffix_parts: list[str] = []
-            if expansion:
-                suffix_parts.append("图谱扩展概念：" + ", ".join(expansion))
-            if chapter_hints:
-                suffix_parts.append("候选章节：" + ", ".join(chapter_hints))
-            expanded_query = query + "\n" + "；".join(suffix_parts)
-            print(f"expanded_query, {expanded_query}, expansion, {expansion}")
-            return expanded_query, expansion
+        def _build_graph_block(payload: dict[str, Any]) -> str:
+            seeds = [str(x) for x in (payload.get("seed_entities") or []) if str(x).strip()][:8]
+            expanded = [str(x) for x in (payload.get("expanded_entities") or []) if str(x).strip()][:10]
+            chapters = [str(x) for x in (payload.get("chapter_titles") or []) if str(x).strip()][:8]
+            paths = [str(x) for x in (payload.get("reasoning_paths") or []) if str(x).strip()][:12]
+            if not (seeds or expanded or chapters or paths):
+                return ""
+            lines = ["[图检索子图]"]
+            if seeds:
+                lines.append("种子节点: " + " / ".join(seeds))
+            if expanded:
+                lines.append("扩散节点: " + " / ".join(expanded))
+            if chapters:
+                lines.append("关联章节: " + " / ".join(chapters))
+            if paths:
+                lines.append("关系路径: " + " | ".join(paths))
+            return "\n".join(lines)
 
         @tool
         def search_book_content(search_query: str) -> str:
@@ -165,18 +201,24 @@ class DeepReadAgent:
                 llm=llm,
             )
             filter_ = {"source": book_source} if book_source else None
-            final_query, expansion_terms = _expand_query_with_graph(search_query)
-            docs = retriever.search(final_query, filter=filter_)
+            vector_docs = retriever.search(search_query, filter=filter_)
+            graph_payload = _graph_retrieve_subgraph(search_query)
+            limit = max(config.max_evidence * 2, config.k)
+            docs = vector_docs[:limit]
 
-            print(
-                "search query=%r expanded=%r source=%r hits=%d graph_terms=%s",
+            logger.info(
+                "search query=%r source=%r vector_hits=%d graph_nodes=%d merged=%d seeds=%s expanded_entities=%s expanded_pairs=%s",
                 search_query,
-                final_query if final_query != search_query else "",
                 book_source,
+                len(vector_docs),
+                len((graph_payload.get("expanded_entities") or [])),
                 len(docs),
-                expansion_terms[:6],
+                (graph_payload.get("seed_entities") or [])[:6],
+                (graph_payload.get("expanded_entities") or [])[:6],
+                (graph_payload.get("expanded_pairs") or [])[:6],
             )
-            if not docs:
+            graph_block = _build_graph_block(graph_payload)
+            if not docs and not graph_block:
                 return "未找到相关内容，请尝试换一种关键词。"
 
             seen = {d.page_content[:100] for d in current_docs}
@@ -196,6 +238,8 @@ class DeepReadAgent:
                     f"[证据{i}] 书名：{title}  章节：{location}\n"
                     + (d.page_content or "").strip()[:600]
                 )
+            if graph_block:
+                blocks.append(graph_block)
             return sep.join(blocks)
 
         @tool
@@ -240,6 +284,8 @@ class DeepReadAgent:
         logger.info("run user=%r query=%r source=%r", user_id, query, book_source)
         react_agent, current_docs = self._build(book_source=book_source, book_id=book_id)
         user_msg = _build_user_msg(query, book_source, memory_context)
+        logger.info("deepread agent prompt(system):\n%s", _SYSTEM_PROMPT)
+        logger.info("deepread agent prompt(user):\n%s", user_msg)
         result = react_agent.invoke(
             {"messages": [("user", user_msg)]},
             config={"recursion_limit": 8},
@@ -270,6 +316,8 @@ class DeepReadAgent:
         logger.info("stream user=%r query=%r source=%r", user_id, query, book_source)
         react_agent, current_docs = self._build(book_source=book_source, book_id=book_id)
         user_msg = _build_user_msg(query, book_source, memory_context)
+        logger.info("deepread agent prompt(system):\n%s", _SYSTEM_PROMPT)
+        logger.info("deepread agent prompt(user):\n%s", user_msg)
 
         async for event in react_agent.astream_events(
             {"messages": [("user", user_msg)]},

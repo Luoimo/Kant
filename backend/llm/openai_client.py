@@ -12,12 +12,14 @@ from config import get_settings
 def get_llm(**kwargs):
     """获取 LangChain ChatOpenAI 实例，用于对话/推理。"""
     s = get_settings()
+    model = kwargs.pop("model", None) or s.openai_model
+    temperature = kwargs.pop("temperature", 0.3)
     return ChatOpenAI(
-        model=s.openai_model,
+        model=model,
         openai_api_key=s.openai_api_key,
         openai_api_base=s.openai_base_url,
-        temperature=kwargs.get("temperature", 0.3),
-        **{k: v for k, v in kwargs.items() if k != "temperature"},
+        temperature=temperature,
+        **kwargs,
     )
 
 
