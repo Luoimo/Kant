@@ -8,13 +8,60 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from unstructured.cleaners.core import (
-    clean,
-    clean_extra_whitespace,
-    clean_ordered_bullets,
-    group_broken_paragraphs,
-    replace_unicode_quotes,
-)
+try:
+    from unstructured.cleaners.core import (
+        clean,
+        clean_extra_whitespace,
+        clean_ordered_bullets,
+        group_broken_paragraphs,
+        replace_unicode_quotes,
+    )
+    _HAS_UNSTRUCTURED = True
+except Exception:
+    _HAS_UNSTRUCTURED = False
+
+    # Fallback cleaners when unstructured is unavailable.
+    def replace_unicode_quotes(text: str) -> str:
+        return (
+            text.replace("\u201c", '"')
+            .replace("\u201d", '"')
+            .replace("\u2018", "'")
+            .replace("\u2019", "'")
+            .replace("\u201a", "'")
+            .replace("\u201b", "'")
+        )
+
+    def clean_extra_whitespace(text: str) -> str:
+        lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in text.splitlines()]
+        return "\n".join(ln for ln in lines if ln)
+
+    def clean_ordered_bullets(text: str) -> str:
+        return re.sub(r"(?m)^\s*\d+[.)]\s*", "", text)
+
+    def group_broken_paragraphs(text: str) -> str:
+        return re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+
+    def clean(
+        text: str,
+        *,
+        extra_whitespace: bool = True,
+        dashes: bool = True,
+        bullets: bool = True,
+        trailing_punctuation: bool = False,
+        lowercase: bool = False,
+    ) -> str:
+        out = text
+        if dashes:
+            out = out.replace("\u2013", "-").replace("\u2014", "-")
+        if bullets:
+            out = re.sub(r"(?m)^\s*[•●▪◦]\s*", "", out)
+        if trailing_punctuation:
+            out = re.sub(r"[。！？.!?]+$", "", out)
+        if lowercase:
+            out = out.lower()
+        if extra_whitespace:
+            out = clean_extra_whitespace(out)
+        return out
 
 from rag.extracter.epub_extractor import (
     BookContent,
@@ -24,6 +71,8 @@ from rag.extracter.epub_extractor import (
 )
 
 logger = logging.getLogger(__name__)
+if not _HAS_UNSTRUCTURED:
+    logger.warning("unstructured 未安装，TextCleaner 将使用降级清洗实现")
 
 
 @dataclass

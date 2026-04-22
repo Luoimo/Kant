@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -10,12 +11,14 @@ from typing import AsyncGenerator
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 
+from graph.neo4j_store import get_neo4j_store
 from llm.openai_client import get_llm
 from rag.chroma.chroma_store import ChromaStore
 from rag.retriever import HybridConfig, HybridRetriever
 from xai.citation import Citation, build_citations
 
 sep = "\n\n"
+_GRAPH_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{2,}|[\u4e00-\u9fff]{2,}")
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,8 @@ class DeepReadConfig:
     fetch_k: int = 20
     max_evidence: int = 8
     hybrid: HybridConfig | None = None
+    enable_graph_expansion: bool = True
+    max_graph_terms: int = 8
 
 
 _SYSTEM_PROMPT = """\
@@ -84,6 +89,66 @@ class DeepReadAgent:
         collection_name = self._collection_name
         llm = self.llm
 
+        def _extract_graph_terms(query: str) -> list[str]:
+            terms: list[str] = []
+            for matched in _GRAPH_TERM_RE.findall(query or ""):
+                term = matched.strip()
+                if len(term) < 2:
+                    continue
+                terms.append(term)
+            out: list[str] = []
+            seen: set[str] = set()
+            for t in terms:
+                k = t.lower()
+                if k not in seen:
+                    seen.add(k)
+                    out.append(t)
+            return out[:20]
+
+        def _expand_query_with_graph(query: str) -> tuple[str, list[str]]:
+            if not config.enable_graph_expansion or not book_id:
+                return query, []
+
+            terms = _extract_graph_terms(query)
+            print(f"_expand_query_with_graph extracted terms: {terms} from query: {query}")
+            if not terms:
+                return query, []
+
+            graph_ctx = get_neo4j_store().router_context(
+                book_id=book_id,
+                query_terms=terms,
+                recent_concepts=[],
+            )
+            matched = graph_ctx.get("matched_concepts") or []
+            related = graph_ctx.get("related_concepts") or []
+            chapters = graph_ctx.get("chapters") or []
+
+            expansion: list[str] = []
+            for item in matched + related:
+                s = str(item).strip()
+                if s and s.lower() not in {q.lower() for q in terms} and s not in expansion:
+                    expansion.append(s)
+                if len(expansion) >= config.max_graph_terms:
+                    break
+            print(f"expansion: {expansion}, chapters: {chapters}, matched: {matched}, related:{related}")
+            chapter_hints: list[str] = []
+            for ch in chapters[:3]:
+                title = str((ch or {}).get("chapter") or "").strip()
+                if title:
+                    chapter_hints.append(title)
+
+            if not expansion and not chapter_hints:
+                return query, []
+
+            suffix_parts: list[str] = []
+            if expansion:
+                suffix_parts.append("图谱扩展概念：" + ", ".join(expansion))
+            if chapter_hints:
+                suffix_parts.append("候选章节：" + ", ".join(chapter_hints))
+            expanded_query = query + "\n" + "；".join(suffix_parts)
+            print(f"expanded_query, {expanded_query}, expansion, {expansion}")
+            return expanded_query, expansion
+
         @tool
         def search_book_content(search_query: str) -> str:
             """在用户本地书库中检索原文证据片段。
@@ -100,9 +165,17 @@ class DeepReadAgent:
                 llm=llm,
             )
             filter_ = {"source": book_source} if book_source else None
-            docs = retriever.search(search_query, filter=filter_)
+            final_query, expansion_terms = _expand_query_with_graph(search_query)
+            docs = retriever.search(final_query, filter=filter_)
 
-            logger.info("search query=%r source=%r hits=%d", search_query, book_source, len(docs))
+            print(
+                "search query=%r expanded=%r source=%r hits=%d graph_terms=%s",
+                search_query,
+                final_query if final_query != search_query else "",
+                book_source,
+                len(docs),
+                expansion_terms[:6],
+            )
             if not docs:
                 return "未找到相关内容，请尝试换一种关键词。"
 

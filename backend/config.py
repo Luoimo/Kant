@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     book_catalog_db: str = "data/books.db"
     covers_dir: str = "data/covers"
 
+    # Neo4j graph storage (optional)
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "graphneo4j"
+    neo4j_database: str = "neo4j"
+
     # LangSmith / LLMSecOps
     langchain_tracing_v2: str = "false"
     langchain_endpoint: str = "https://api.smith.langchain.com"

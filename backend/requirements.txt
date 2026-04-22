@@ -47,3 +47,4 @@ python-dotenv~=1.2.2
 uvicorn[standard]>=0.30.0
 
 python-multipart>=0.0.26
+neo4j>=5.28.0

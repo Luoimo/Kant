@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from config import get_settings
+from graph.neo4j_store import get_neo4j_store
 from rag.chroma.chroma_store import ChromaStore
 from rag.extracter.epub_extractor import EpubExtractor
 from storage.book_catalog import get_book_catalog
@@ -93,6 +94,19 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
         source=result.source,
         total_chunks=result.total_chunks,
         cover_path=cover_path,
+    )
+    get_neo4j_store().upsert_book(
+        book_id=result.book_id,
+        title=result.book_title,
+        author=result.author,
+        source=result.source,
+        total_chunks=result.total_chunks,
+        cover_path=cover_path,
+    )
+    graph_docs = store.get_all_documents(filter={"book_id": result.book_id})
+    get_neo4j_store().upsert_book_graph(
+        book_id=result.book_id,
+        documents=graph_docs,
     )
 
     return IngestResponse(
