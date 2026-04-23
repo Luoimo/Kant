@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     neo4j_password: str = "graphneo4j"
     neo4j_database: str = "neo4j"
 
+    # 知识图谱抽取后端:
+    # - "llm":              gpt-4o-mini NER + RE
+    # - "hanlp":            本地 HanLP NER + OpenIE
+    # - "hanlp_ner_llm_re": HanLP RESTful NER + LLM RE
+    graph_extractor_backend: str = "hanlp_ner_llm_re"
+    hanlp_api_url: str = "https://www.hanlp.com/hanlp/v21/redirect"
+    hanlp_api_key: str = "69e9e04aeaf61a3aca91b90f"
+    hanlp_language: str = "zh"
+    hanlp_ner_task: str = "ner/ontonotes"
+
     # LangSmith / LLMSecOps
     langchain_tracing_v2: str = "false"
     langchain_endpoint: str = "https://api.smith.langchain.com"

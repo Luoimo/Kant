@@ -3,6 +3,7 @@ import logging
 import re
 from typing import Any
 from .graph_extractor import LLMGraphExtractor
+from .hanlp_ner_llm_re_extractor import HanLPNerLLMReExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,19 @@ class Neo4jStore:
         self._database = settings.neo4j_database
         self._enabled = False
         self._driver = None
-        self._llm_graph_extractor = LLMGraphExtractor()
+
+        backend = (settings.graph_extractor_backend or "llm").strip().lower()
+        if backend == "hanlp_ner_llm_re":
+            self._llm_graph_extractor = HanLPNerLLMReExtractor(
+                api_url=settings.hanlp_api_url,
+                api_key=settings.hanlp_api_key,
+                language=settings.hanlp_language,
+                ner_task=settings.hanlp_ner_task,
+            )
+            logger.info("知识图谱抽取后端: HanLP NER（RESTful）+ LLM RE")
+        else:
+            self._llm_graph_extractor = LLMGraphExtractor()
+            logger.info("知识图谱抽取后端: LLM（gpt-4o-mini NER + RE）")
 
         uri = settings.neo4j_uri.strip()
         user = settings.neo4j_user.strip()

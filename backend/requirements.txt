@@ -48,3 +48,7 @@ uvicorn[standard]>=0.30.0
 
 python-multipart>=0.0.26
 neo4j>=5.28.0
+# 可选：HanLP 本地图谱抽取后端（无 LLM API 费用，首次运行自动下载模型 ~400MB）
+hanlp>=2.1.0
+# 可选：HanLP 云端 RESTful 客户端（配合 API Key，不下载本地模型）
+hanlp-restful>=0.0.24

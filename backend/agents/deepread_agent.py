@@ -240,6 +240,7 @@ class DeepReadAgent:
                 )
             if graph_block:
                 blocks.append(graph_block)
+            logger.info("blocks=%r", blocks)
             return sep.join(blocks)
 
         @tool
@@ -284,8 +285,6 @@ class DeepReadAgent:
         logger.info("run user=%r query=%r source=%r", user_id, query, book_source)
         react_agent, current_docs = self._build(book_source=book_source, book_id=book_id)
         user_msg = _build_user_msg(query, book_source, memory_context)
-        logger.info("deepread agent prompt(system):\n%s", _SYSTEM_PROMPT)
-        logger.info("deepread agent prompt(user):\n%s", user_msg)
         result = react_agent.invoke(
             {"messages": [("user", user_msg)]},
             config={"recursion_limit": 8},
