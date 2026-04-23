@@ -6,7 +6,7 @@ from rag.chunker.text_chunker import (
     TextChunker, ChunkConfig, TextChunk, ChunkMeta,
 )
 from rag.cleaner.text_cleaner import CleanedSection, CleanedBookContent
-from rag.conftest import SECTION_TEXTS, _make_cleaned_section
+from tests.rag.conftest import SECTION_TEXTS, _make_cleaned_section
 
 
 class TestChunkSection:
