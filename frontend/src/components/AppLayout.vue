@@ -17,8 +17,6 @@ onMounted(() => booksStore.fetchBooks())
 
 const navItems = [
   { key: 'library', label: '我的书库', icon: '📚' },
-  { key: 'chat', label: 'AI 对话', icon: '💬' },
-  { key: 'notes', label: '我的笔记', icon: '📝' },
 ]
 
 const activeNav = computed(() => route.name)

@@ -215,28 +215,36 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                 print(f"[chat] critic failed: {e}")
 
         # Post-stream side effects — fire and forget
+        # We start the background tasks immediately without awaiting them here
+        # so that we can proceed to generate followups without blocking the stream.
         tasks: list = []
         
         # 将审查笔记补充到聊天记录中
         if critic_full:
-            tasks.append(asyncio.to_thread(
-                agent.add_ai_message,
-                content=critic_full,
-                book_id=book_id,
-                user_id=req.user_id,
-                thread_id=req.thread_id
+            tasks.append(asyncio.create_task(
+                asyncio.to_thread(
+                    agent.add_ai_message,
+                    content=critic_full,
+                    book_id=book_id,
+                    user_id=req.user_id,
+                    thread_id=req.thread_id
+                )
             ))
             
         if book_title:
             # Removed the docs_count > 0 condition so notes are saved even for casual chat or non-RAG answers
-            tasks.append(asyncio.to_thread(
-                _run_note_hook, note_agent, req.query, full_answer, book_title, book_id
+            tasks.append(asyncio.create_task(
+                asyncio.to_thread(
+                    _run_note_hook, note_agent, req.query, full_answer, book_title, book_id
+                )
             ))
         if mem0 and full_answer:
-            tasks.append(asyncio.to_thread(mem0.add_qa, req.query, full_answer))
-        
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            tasks.append(asyncio.create_task(
+                asyncio.to_thread(mem0.add_qa, req.query, full_answer)
+            ))
+            
+        # Instead of awaiting tasks here, we let them run in the background
+        # and immediately start generating followups
 
         if followup_agent and full_answer:
             followups = await followup_agent.agenerate(req.query, full_answer)

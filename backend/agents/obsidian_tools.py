@@ -49,12 +49,15 @@ def append_note_to_obsidian(book_title: str, markdown_content: str) -> str:
     """将你精心整理并带有双向链接的 Markdown 笔记追加写入到对应书籍的 Obsidian 文件中。
     注意：在完成所有思考和内容编排后，必须调用此工具将笔记持久化。
     """
+    # 确保追加的内容末尾有换行符，防止多条笔记粘连在一起
+    formatted_content = markdown_content.strip() + "\n\n"
+
     # 先尝试追加
-    res = _run_obsidian(["append", f"file={book_title}", f"content={markdown_content}", "inline"])
+    res = _run_obsidian(["append", f"file={book_title}", f"content={formatted_content}", "inline"])
     
     # 如果文件不存在，则创建新文件
     if "not found" in res.lower() or "Error" in res:
-        res = _run_obsidian(["create", f"name={book_title}", f"content={markdown_content}"])
+        res = _run_obsidian(["create", f"name={book_title}", f"content={formatted_content}"])
         
     return res
 

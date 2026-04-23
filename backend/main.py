@@ -7,7 +7,6 @@ from fastapi.staticfiles import StaticFiles
 
 from api.chat import router as chat_router
 from api.books import router as books_router
-from api.notes import router as notes_router
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
@@ -55,7 +54,6 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(books_router)
-app.include_router(notes_router)
 
 # Serve extracted cover images
 _covers_dir = Path("data/covers")
