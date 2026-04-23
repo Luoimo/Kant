@@ -8,7 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from api.chat import router as chat_router
 from api.books import router as books_router
 from api.notes import router as notes_router
+import logging
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

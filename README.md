@@ -150,6 +150,12 @@ BOOK_CATALOG_DB=data/books.db
 
 # EPUB 封面提取目录
 COVERS_DIR=data/covers
+
+# Neo4j（可选，不填则跳过图数据库写入）
+NEO4J_URI=
+NEO4J_USER=
+NEO4J_PASSWORD=
+NEO4J_DATABASE=neo4j
 ```
 
 ### 3. 启动 API
@@ -231,7 +237,11 @@ curl -X POST http://localhost:8000/chat \
 ### POST /books/upload
 
 - 上传 `.epub` 文件（multipart/form-data）
-- 触发入库流水线：解析 → 切块 → 向量化 → 写入 ChromaDB → 写入 SQLite → 提取封面
+- 触发入库流水线：解析 → 切块 → 向量化 → 写入 ChromaDB → 写入 SQLite（可选写入 Neo4j）→ 提取封面
+- Neo4j 启用时会自动构建图谱骨架：
+  - `(:Book)-[:HAS_CHAPTER]->(:Chapter)`
+  - `(:Chapter)-[:COVERS]->(:Concept)`
+  - `(:Concept)-[:RELATED_TO]->(:Concept)`（同章节概念共现）
 - 入库成功后自动刷新 BM25 索引缓存
 - 响应含 `book_id`（确定性 uuid5，后续所有操作均以此为主键）
 
