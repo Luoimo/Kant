@@ -70,12 +70,24 @@ class Neo4jStore:
             return
 
         try:
-            self._driver = GraphDatabase.driver(uri, auth=(user, password))
+            self._driver = GraphDatabase.driver(
+                uri,
+                auth=(user, password),
+                max_connection_lifetime=3600,
+                max_connection_pool_size=50,
+                connection_timeout=30,
+                keep_alive=True,
+            )
             self._driver.verify_connectivity()
             self._enabled = True
             logger.info("Neo4j 连接成功（uri=%s, database=%s）", uri, self._database)
         except Exception as exc:
-            logger.warning("Neo4j 初始化失败（%s），已跳过图数据库写入", exc)
+            logger.warning(
+                "Neo4j 初始化失败（uri=%s, err=%s）——所有图写入将被跳过。"
+                "请确认：① Aura 实例已 Resume  ② 网络可访问端口 7687",
+                uri,
+                exc,
+            )
             self._driver = None
             self._enabled = False
 
@@ -93,6 +105,7 @@ class Neo4jStore:
     ) -> None:
         """在 Neo4j 中创建/更新 Book 节点和 Author 关系。"""
         if not self._enabled or self._driver is None:
+            logger.warning("Neo4j 未连接，跳过 upsert_book（book_id=%s）——请检查 Aura 实例是否已 Resume", book_id)
             return
 
         book_payload: dict[str, Any] = {
@@ -118,7 +131,7 @@ class Neo4jStore:
         RETURN b.book_id AS book_id
         """
         try:
-            with self._driver.session(database=self._database) as session:
+            with self._driver.session() as session:
                 session.run(query, book_payload).consume()
                 if author.strip():
                     session.run(
@@ -147,6 +160,7 @@ class Neo4jStore:
         - 小说类：Character + Event + INVOLVED_IN
         """
         if not self._enabled or self._driver is None:
+            logger.warning("Neo4j 未连接，跳过 upsert_book_graph（book_id=%s）——请检查 Aura 实例是否已 Resume", book_id)
             return
 
         (
@@ -163,12 +177,25 @@ class Neo4jStore:
             max_events_per_chapter=max_events_per_chapter,
         )
 
+        total_chars_extracted = sum(len(ch.get("characters", [])) for ch in chapters)
+        total_concepts_extracted = sum(len(ch.get("concepts", [])) for ch in chapters)
+        total_char_pairs = len(character_pairs)
+        logger.info(
+            "Neo4j 准备写入 book_id=%s: chapters=%d concepts=%d characters=%d character_pairs=%d concept_pairs=%d",
+            book_id, len(chapters), total_concepts_extracted, total_chars_extracted,
+            total_char_pairs, len(concept_pairs),
+        )
+        if not chapters:
+            logger.warning("Neo4j upsert_book_graph: 章节为空，跳过写入（book_id=%s）", book_id)
+            return
+
         try:
-            with self._driver.session(database=self._database) as session:
+            with self._driver.session() as session:
                 self._clear_book_graph_scope(session=session, book_id=book_id)
                 self._upsert_chapter_layer(
                     session=session, book_id=book_id, chapters=chapters, schema=schema
                 )
+                logger.info("Neo4j 章节层写入完成（book_id=%s, chapters=%d）", book_id, len(chapters))
                 self._upsert_entity_embeddings_layer(
                     session=session, book_id=book_id, chapters=chapters, schema=schema
                 )
@@ -181,6 +208,10 @@ class Neo4jStore:
                     dependency_pairs=dependency_pairs,
                     hierarchy_pairs=hierarchy_pairs,
                     schema=schema,
+                )
+                logger.info(
+                    "Neo4j 关系层写入完成（book_id=%s, char_pairs=%d, concept_pairs=%d）",
+                    book_id, total_char_pairs, len(concept_pairs),
                 )
         except Exception as exc:
             logger.warning("Neo4j upsert_book_graph 失败（book_id=%s, err=%s）", book_id, exc)
@@ -563,7 +594,7 @@ class Neo4jStore:
             return {"seed_entities": [], "expanded_entities": [], "chapter_titles": [], "reasoning_paths": []}
 
         try:
-            with self._driver.session(database=self._database) as session:
+            with self._driver.session() as session:
                 seed_entities = self._resolve_seed_entities(
                     session=session, terms=terms, book_id=book_id, seed_top_k=seed_top_k
                 )
@@ -969,10 +1000,13 @@ class Neo4jStore:
         title = (raw or "").strip()
         if not title:
             return ""
-        title = _CHAPTER_PREFIX_RE.sub("", title).strip()
-        if Neo4jStore._is_noise_text(title):
+        # 尝试去掉"第X章"前缀，保留副标题部分
+        stripped = _CHAPTER_PREFIX_RE.sub("", title).strip()
+        # 若去掉前缀后为空（即标题本身就是"第X章"），保留原始标题作为章节标识
+        effective = stripped if stripped else title
+        if Neo4jStore._is_noise_text(effective):
             return ""
-        return title
+        return effective
 
     # ------------------------------------------------------------------
     # 内部：按章节分组文档
