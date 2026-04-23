@@ -33,7 +33,7 @@ class HybridConfig:
     fetch_k: int = 20
     final_k: int = 6
     rrf_k: int = 60
-    enable_query_rewrite: bool = True
+    enable_query_rewrite: bool = False
     reranker: str = "llm"
     cross_encoder_model: str = "BAAI/bge-reranker-base"
 

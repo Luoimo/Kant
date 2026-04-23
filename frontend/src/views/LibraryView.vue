@@ -99,7 +99,7 @@ function openChat(book) {
               v-for="book in booksStore.books"
               :key="book.id"
               class="book-card"
-              @click="book.status !== 'unread' ? openReader(book) : null"
+              @click="openReader(book)"
             >
               <div
                 class="book-cover"

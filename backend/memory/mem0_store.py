@@ -86,22 +86,46 @@ class Mem0Store:
                 "provider": "chroma",
                 "config": {
                     "collection_name": "mem0_vector_base",
-                    # Optional: ChromaDB Cloud configuration
-                    "api_key": s.chroma_api_key,
-                    "tenant": s.chroma_tenant,
                 },
-                "custom_fact_extraction_prompt": USER_MEMORY_EXTRACTION_PROMPT
-            }
+            },
+            "history_db_path": ":memory:",
+            "custom_instructions": USER_MEMORY_EXTRACTION_PROMPT
         }
+        
+        # 只有在配置了云端 API Key 的情况下才使用云端
+        if s.chroma_api_key:
+            config["vector_store"]["config"]["api_key"] = s.chroma_api_key
+            config["vector_store"]["config"]["tenant"] = s.chroma_tenant
+            # Note: Mem0 vector store config does not accept 'database' field
+        else:
+            # 本地持久化配置
+            config["vector_store"]["config"]["path"] = s.chroma_persist_dir
 
         try:
             from mem0 import Memory
-            memory = Memory.from_config(config)
+            
+            try:
+                memory = Memory.from_config(config)
+                self._client = memory
+                self._user_id = s.mem0_user_id.strip()
+                self._enabled = True
+                logger.info("Mem0 初始化成功（user_id=%s）", self._user_id)
+            except Exception as e:
+                if s.chroma_api_key:
+                    logger.warning(f"Chroma Cloud 初始化失败: {e}。将回退到本地存储。")
+                    # Fallback to local storage
+                    config["vector_store"]["config"].pop("api_key", None)
+                    config["vector_store"]["config"].pop("tenant", None)
+                    config["vector_store"]["config"]["path"] = s.chroma_persist_dir
+                    
+                    memory = Memory.from_config(config)
+                    self._client = memory
+                    self._user_id = s.mem0_user_id.strip()
+                    self._enabled = True
+                    logger.info("Mem0 已回退并使用本地存储初始化成功")
+                else:
+                    raise e
 
-            self._client = memory
-            self._user_id = s.mem0_user_id.strip()
-            self._enabled = True
-            logger.info("Mem0 初始化成功（user_id=%s）", self._user_id)
         except ImportError:
             logger.warning("mem0ai 未安装，记忆功能已禁用（pip install mem0ai）")
             self._enabled = False
@@ -146,6 +170,7 @@ class Mem0Store:
             result = self._client.add(
                 messages=messages,
                 user_id=self._user_id,
+                prompt=USER_MEMORY_EXTRACTION_PROMPT,
             )
             logger.debug("Mem0 add_qa 返回：%s", result)
         except Exception as exc:

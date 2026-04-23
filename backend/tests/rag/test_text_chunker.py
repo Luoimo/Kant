@@ -6,7 +6,7 @@ from rag.chunker.text_chunker import (
     TextChunker, ChunkConfig, TextChunk, ChunkMeta,
 )
 from rag.cleaner.text_cleaner import CleanedSection, CleanedBookContent
-from tests.rag.conftest import SECTION_TEXTS, _make_cleaned_section
+from rag.conftest import SECTION_TEXTS, _make_cleaned_section
 
 
 class TestChunkSection:
@@ -18,7 +18,7 @@ class TestChunkSection:
         assert all(isinstance(c, TextChunk) for c in chunks)
 
     def test_empty_section_returns_empty_list(self):
-        from rag.extracter.epub_extractor import SectionContent
+        from backend.rag.extracter.epub_extractor import SectionContent
         empty_section = CleanedSection(
             section_index=0, text="   ", blocks=[],
             source_section=SectionContent(0, "", "", [], "chap1.xhtml"),

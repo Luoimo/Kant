@@ -18,11 +18,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.prebuilt import create_react_agent
 
 from config import get_settings
 from llm.openai_client import get_llm
 from storage.book_catalog import get_note_catalog
 from utils.text import safe_id
+from agents.obsidian_tools import TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,21 @@ AI回答：{answer}
   "concepts": ["核心概念1", "概念2", "概念3"]
 }}"""
 
+_AGENT_SYSTEM_PROMPT = """你是一个具有极高自主性的卡片盒笔记法 (Zettelkasten) 专家。
+当前用户正在阅读《{book_title}》。这是刚才的一轮问答：
+【用户疑问】：{question}
+【AI回答】：{answer}
+
+系统已经为你初步提炼了以下要素：
+- 疑问核心：{summary}
+- 核心概念：{concepts}
+
+【你的任务】
+1. 利用 search_vault_for_concept 工具去 Obsidian 知识库中搜索上述“核心概念”，看看其他书籍是否也有相关笔记。
+2. 整合问答内容和搜索到的跨书关联，撰写一段格式优美、带有 Obsidian 双向链接（如 [[其他书名]]）和标签（如 #概念）的 Markdown 笔记。
+3. 必须调用 append_note_to_obsidian 工具，将写好的笔记保存到知识库中（注意传入 file 参数时直接使用书名，如 '{book_title}'）。
+4. 完成保存后，结束任务并告诉用户你做了哪些知识串联。
+"""
 
 # ---------------------------------------------------------------------------
 # 数据类
@@ -69,13 +86,11 @@ class NoteEntry:
 
 class NoteAgent:
     """
-    轻量 hook，只做：
-    1. LLM 提炼问答 → NoteEntry
-    2. 跨书关联搜索（可选，依赖 NoteVectorStore）
-    3. 追加格式化 Markdown 到 data/notes/{书名}.md
-    4. Upsert 到 ChromaDB notes 集合
-
-    用户手记 / 笔记读取 / 书目列表 → NoteService (services/note_service.py)
+    升级版 NoteAgent：作为 ReAct Agent 运行，自主使用 Obsidian CLI 工具。
+    1. LLM 提炼基本要素 (JSON)
+    2. 触发 Tool-calling Agent 进行知识库搜索与编织
+    3. Agent 自主调用 Obsidian CLI 写入 Markdown
+    4. Upsert 到 ChromaDB notes 集合供前端时间轴展示
     """
 
     def __init__(
@@ -83,21 +98,27 @@ class NoteAgent:
         *,
         notes_dir: Path | None = None,
         llm=None,
-        note_vector_store=None,
     ) -> None:
         settings = get_settings()
         self._notes_dir = Path(notes_dir or settings.note_storage_dir)
         self._notes_dir.mkdir(parents=True, exist_ok=True)
         self._llm = llm or get_llm(temperature=0.1)
-        self._note_vector_store = note_vector_store
+        
+        # 初始化 Obsidian ReAct Agent
+        self._tools = TOOLS
+        self._agent_executor = create_react_agent(
+            self._llm,
+            tools=self._tools
+        )
 
     def process_qa(
         self, question: str, answer: str, book_title: str, book_id: str = ""
     ) -> NoteEntry | None:
-        """deepread_book 后自动调用。提炼问答并写入文件 + 向量库。"""
+        """deepread_book 后自动调用。提炼问答、触发 Agent 并入库。"""
         if not book_title:
             return None
 
+        # 1. 提取结构化数据 (用于 VectorDB 和时间轴)
         try:
             extracted = self._extract(question, answer)
         except Exception as e:
@@ -110,16 +131,30 @@ class NoteAgent:
             **extracted,
         )
 
-        if self._note_vector_store:
-            entry.cross_book_refs = self._find_associations(entry, book_title)
+        # 2. 让 Agent 自主执行 Obsidian 搜索和写入
+        try:
+            logger.info("Starting Obsidian Note Agent for %s", book_title)
+            
+            # Format the system prompt with variables for this specific run
+            # Since create_react_agent uses the modifier globally, we can just pass the formatted task in the human message
+            task_msg = _AGENT_SYSTEM_PROMPT.format(
+                book_title=book_title,
+                question=question,
+                answer=answer,
+                summary=entry.question_summary,
+                concepts=", ".join(entry.concepts)
+            )
+            
+            self._agent_executor.invoke({
+                "messages": [HumanMessage(content=task_msg + "\n\n请开始执行笔记整理任务。请务必最后调用 append_note_to_obsidian 工具进行保存。")]
+            })
+        except Exception as e:
+            logger.error("Obsidian Agent execution failed: %s", e)
 
-        note_path = self._resolve_note_path(book_id, book_title)
-        self._append_to_file(entry, raw_question=question, path=note_path)
+        # 3. 记录到目录，确保前端可以定位
         if book_id:
+            note_path = self._resolve_note_path(book_id, book_title)
             get_note_catalog().upsert(book_id=book_id, file_path=str(note_path))
-
-        if self._note_vector_store:
-            self._save_to_vector_store(entry)
 
         logger.info("processed Q&A for 《%s》, concepts=%s", book_title, entry.concepts)
         return entry
@@ -133,8 +168,7 @@ class NoteAgent:
             record = get_note_catalog().get_by_book_id(book_id)
             if record:
                 return Path(record["file_path"])
-            return self._notes_dir / f"{book_id}.md"
-        # fallback for calls without book_id (e.g. tests)
+        # 改为使用书名，契合 Obsidian 的命名习惯
         safe = re.sub(r'[<>:"/\\|?*《》【】\r\n]', "_", book_title).strip("_. ") or "unknown"
         return self._notes_dir / f"{safe}.md"
 
@@ -157,62 +191,6 @@ class NoteAgent:
             "followup_questions": [str(x) for x in data.get("followup_questions", [])],
             "concepts": [str(x) for x in data.get("concepts", [])],
         }
-
-    def _find_associations(self, entry: NoteEntry, exclude_book: str) -> list[dict]:
-        search_text = entry.question_summary + " " + " ".join(entry.concepts)
-        try:
-            return self._note_vector_store.search_similar(
-                text=search_text,
-                exclude_book=exclude_book,
-                top_k=2,
-            )
-        except Exception as e:
-            logger.warning("association search failed: %s", e)
-            return []
-
-    def _append_to_file(self, entry: NoteEntry, raw_question: str, path: Path) -> None:
-        dt = datetime.fromisoformat(entry.date)
-        display_date = dt.strftime("%Y-%m-%d %H:%M")
-
-        lines: list[str] = [
-            "\n---\n",
-            f"## {display_date} · {entry.question_summary}\n",
-            f"**疑问**：{raw_question.strip()}\n",
-        ]
-
-        if entry.answer_keypoints:
-            lines.append("\n**回答要点**")
-            lines.extend(f"- {kp}" for kp in entry.answer_keypoints)
-
-        if entry.followup_questions:
-            lines.append("\n**延伸追问**")
-            lines.extend(f"- {q}" for q in entry.followup_questions)
-
-        if entry.cross_book_refs:
-            lines.append("")
-            for ref in entry.cross_book_refs:
-                ref_book = ref.get("book_title", "")
-                ref_summary = ref.get("question_summary", "")
-                ref_date = ref.get("date", "")
-                lines.append(f'💡 关联：《{ref_book}》中的\u201c{ref_summary}\u201d（{ref_date}）')
-
-        with open(path, "a", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-
-    def _save_to_vector_store(self, entry: NoteEntry) -> None:
-        entry_id = f"qa_{safe_id(entry.book_title)}_{entry.date}"
-        content = f"{entry.question_summary} {' '.join(entry.concepts)}"
-        self._note_vector_store.add_entry(
-            entry_id=entry_id,
-            content=content,
-            metadata={
-                "book_title": entry.book_title,
-                "date": entry.date,
-                "question_summary": entry.question_summary,
-                "concepts": json.dumps(entry.concepts, ensure_ascii=False),
-                "entry_type": "qa",
-            },
-        )
 
 
 __all__ = ["NoteAgent", "NoteEntry"]

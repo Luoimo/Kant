@@ -204,3 +204,6 @@
 
 > 本项目的本质不是“做一个AI功能”，  
 > 而是“设计并实现一个可落地的AI系统”。
+
+# Obsidian CLI
+使用Obsidian CLI进行笔记管理，终端输入obsidian help查看帮助信息。

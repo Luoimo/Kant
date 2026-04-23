@@ -93,7 +93,7 @@ class TestCleanContent:
         assert cleaned.sections[1].chapter_title == "第二章 先验感性论"
 
     def test_no_toc_gives_empty_titles(self):
-        from tests.rag.conftest import SECTION_TEXTS, _make_section_content
+        from backend.tests.rag.conftest import SECTION_TEXTS, _make_section_content
         sections = [_make_section_content(i, SECTION_TEXTS[i]) for i in range(2)]
         content = BookContent(
             source="test.epub", total_sections=2,

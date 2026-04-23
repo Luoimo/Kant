@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from config import get_settings
 from services.note_service import NoteService
 from storage.book_catalog import get_book_catalog
-from storage.note_vector_store import make_note_vector_store
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -18,8 +17,7 @@ router = APIRouter(prefix="/notes", tags=["notes"])
 def _service() -> NoteService:
     settings = get_settings()
     return NoteService(
-        notes_dir=Path(settings.note_storage_dir),
-        note_vector_store=make_note_vector_store(settings),
+        notes_dir=Path(settings.note_storage_dir)
     )
 
 

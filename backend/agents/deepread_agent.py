@@ -49,13 +49,27 @@ _SYSTEM_PROMPT = """\
 """
 
 
-def _build_user_msg(query: str, book_source: str | None, memory_context: str) -> str:
-    msg = query
+def _build_system_msg(
+    book_title: str | None,
+    book_source: str | None,
+    memory_context: str,
+    selected_text: str | None,
+    current_chapter: str | None,
+) -> str:
+    """Build dynamic context to inject into the system prompt instead of user message."""
+    parts = []
+    if book_title:
+        parts.append(f"【当前阅读书籍】：《{book_title}》")
     if book_source:
-        msg = f"[当前书籍来源：{book_source}]\n\n{msg}"
+        parts.append(f"【当前书籍来源】：{book_source}")
+    if current_chapter:
+        parts.append(f"【当前阅读章节】：{current_chapter}")
+    if selected_text:
+        parts.append(f"【用户当前划选的原文片段】（用户的问题可能针对这段话）：\n{selected_text}")
     if memory_context:
-        msg += f"\n\n[历史阅读记录（仅供参考）]\n{memory_context}"
-    return msg
+        parts.append(f"【用户历史阅读记录】（仅供参考，用于个性化回答）：\n{memory_context}")
+        
+    return "\n\n".join(parts) if parts else ""
 
 
 class DeepReadAgent:
@@ -68,21 +82,24 @@ class DeepReadAgent:
         collection_name: str | None = None,
         llm=None,
         config: DeepReadConfig | None = None,
-        note_vector_store=None,
     ) -> None:
         self.store = store or ChromaStore()
         self.llm = llm or get_llm(temperature=0.2)
         self.config = config or DeepReadConfig()
         self._collection_name = collection_name or self.store.collection_name
-        self._note_vector_store = note_vector_store
 
-    def _build(self, *, book_source: str | None, book_id: str):
+    def _build(self, *, book_source: str | None, book_id: str, memory=None, sys_msg: str = ""):
         """Build a react_agent with bound tool closures. Returns (agent, current_docs)."""
         current_docs: list[Document] = []
         store = self.store
         config = self.config
         collection_name = self._collection_name
         llm = self.llm
+        
+        # Combine the static _SYSTEM_PROMPT with any dynamic context
+        full_system_prompt = _SYSTEM_PROMPT
+        if sys_msg:
+            full_system_prompt += f"\n\n[System Context Update]\n{sys_msg}"
 
         @tool
         def search_book_content(search_query: str) -> str:
@@ -130,30 +147,116 @@ class DeepReadAgent:
             """检索用户的历史读书笔记。
             当用户询问“我之前记过什么”、“关于某某概念我以前有什么想法”，或你需要跨书串联知识时调用。
             """
-            if not self._note_vector_store:
-                return "笔记系统未启用，无法检索。"
-            try:
-                results = self._note_vector_store.search_similar(text=query, exclude_book="", top_k=3)
-                if not results:
-                    return "未在历史笔记中找到相关记录。"
-                lines = []
-                for i, r in enumerate(results, 1):
-                    book = r.get("book_title", "未知书籍")
-                    summary = r.get("question_summary", "")
-                    concepts = ", ".join(r.get("concepts", []))
-                    date = r.get("date", "")[:10]
-                    lines.append(f"[笔记{i}] 《{book}》({date}): {summary} (涉及概念: {concepts})")
-                return "找到以下历史笔记记录：\n" + "\n".join(lines)
-            except Exception as e:
-                return f"笔记检索失败：{e}"
+            from agents.obsidian_tools import search_vault_for_concept
+            return search_vault_for_concept.invoke(query)
 
         from langgraph.prebuilt import create_react_agent
+        
         react_agent = create_react_agent(
             llm,
             [search_book_content, search_past_notes],
-            prompt=_SYSTEM_PROMPT,
+            prompt=full_system_prompt,
+            checkpointer=memory,
         )
         return react_agent, current_docs
+
+    def get_chat_history(
+        self,
+        *,
+        book_id: str = "",
+        user_id: str = "default",
+        thread_id: str = "default",
+    ) -> list[dict]:
+        """Fetch chat history for a given user and book."""
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        from pathlib import Path
+        import sqlite3
+        from langchain_core.messages import BaseMessage
+        
+        db_path = Path("data/chat_history.db")
+        if not db_path.exists():
+            return []
+            
+        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
+        
+        try:
+            with sqlite3.connect(db_path, check_same_thread=False) as conn:
+                memory = SqliteSaver(conn)
+                memory.setup()
+                tuple_ = memory.get_tuple({"configurable": {"thread_id": actual_thread}})
+                if not tuple_:
+                    return []
+                    
+                # extract messages from the state
+                state = tuple_.checkpoint.get("channel_values", {})
+                messages = state.get("messages", [])
+                
+                history = []
+                for m in messages:
+                    if not isinstance(m, BaseMessage):
+                        continue
+                    
+                    # Filter out system messages or tool calls if needed
+                    if m.type in ["human", "user"]:
+                        content = m.content
+                        # 尝试剔除后端拼装的系统前缀，只提取真实的 user query
+                        import re
+                        if "【用户问题】：\n" in content:
+                            content = content.split("【用户问题】：\n")[-1]
+                        elif "[历史阅读记录（仅供参考）]" in content:
+                            # 如果包含阅读记录，通常用户问题在最前面
+                            content = content.split("\n\n[历史阅读记录（仅供参考）]")[0]
+                            # 去除可能存在的书籍前缀
+                            content = re.sub(r'^\[当前书籍来源：.*?\]\n\n', '', content)
+                        else:
+                            content = re.sub(r'^\[当前书籍来源：.*?\]\n\n', '', content)
+                            content = re.sub(r'^【当前阅读书籍】：.*?\n\n', '', content)
+                            content = re.sub(r'\n\n【当前阅读章节】：.*$', '', content)
+                            
+                        history.append({"role": "user", "content": content.strip()})
+                    elif m.type in ["ai", "assistant"]:
+                        # Skip if it's just a tool call with no real content
+                        if not m.content and getattr(m, "tool_calls", None):
+                            continue
+                        history.append({"role": "ai", "content": m.content})
+                        
+                return history
+        except Exception as e:
+            logger.error("Failed to load chat history: %s", e)
+            return []
+
+    def add_ai_message(
+        self,
+        content: str,
+        *,
+        book_id: str = "",
+        user_id: str = "default",
+        thread_id: str = "default",
+    ) -> None:
+        """Manually append an AI message (e.g. from CriticAgent) to the chat history."""
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        from pathlib import Path
+        import sqlite3
+        from langchain_core.messages import AIMessage
+        
+        db_path = Path("data/chat_history.db")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
+        
+        try:
+            with sqlite3.connect(db_path, check_same_thread=False) as conn:
+                memory = SqliteSaver(conn)
+                memory.setup()
+                
+                react_agent, _ = self._build(book_source=None, book_id=book_id, memory=memory)
+                react_agent.update_state(
+                    {"configurable": {"thread_id": actual_thread}},
+                    {"messages": [AIMessage(content=content)]}
+                )
+                logger.info("Successfully appended AI message to thread %s", actual_thread)
+        except Exception as e:
+            logger.error("Failed to append AI message to history: %s", e)
 
     def run(
         self,
@@ -163,14 +266,42 @@ class DeepReadAgent:
         book_id: str = "",
         memory_context: str = "",
         user_id: str = "default",
+        thread_id: str = "default",
+        selected_text: str | None = None,
+        current_chapter: str | None = None,
     ) -> DeepReadResult:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        from pathlib import Path
+        import sqlite3
+        
         logger.info("run user=%r query=%r source=%r", user_id, query, book_source)
-        react_agent, current_docs = self._build(book_source=book_source, book_id=book_id)
-        user_msg = _build_user_msg(query, book_source, memory_context)
-        result = react_agent.invoke(
-            {"messages": [("user", user_msg)]},
-            config={"recursion_limit": 8},
+        
+        db_path = Path("data/chat_history.db")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Use a deterministic thread_id based on user and book so chat history is maintained
+        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
+        
+        # 提取动态上下文并组装为系统指令
+        sys_msg = _build_system_msg(
+            book_title=book_id,  # For simplistic implementation here
+            book_source=book_source,
+            memory_context=memory_context,
+            selected_text=selected_text,
+            current_chapter=current_chapter,
         )
+        
+        with sqlite3.connect(db_path, check_same_thread=False) as conn:
+            memory = SqliteSaver(conn)
+            memory.setup() # Ensure tables exist
+            
+            react_agent, current_docs = self._build(book_source=book_source, book_id=book_id, memory=memory, sys_msg=sys_msg)
+            
+            result = react_agent.invoke(
+                {"messages": [("user", query)]},
+                config={"configurable": {"thread_id": actual_thread}, "recursion_limit": 8},
+            )
+            
         answer = result["messages"][-1].content
         citations = build_citations(current_docs)
         return DeepReadResult(
@@ -187,39 +318,60 @@ class DeepReadAgent:
         book_id: str = "",
         memory_context: str = "",
         user_id: str = "default",
+        thread_id: str = "default",
+        selected_text: str | None = None,
+        current_chapter: str | None = None,
     ) -> AsyncGenerator[tuple[str, object], None]:
-        """Async generator yielding (event_type, data) for SSE streaming.
-
-        Yields:
-            ("token", str)  — incremental text chunk
-            ("done", dict)  — final metadata: citations, docs_count
-        """
+        """Async generator yielding (event_type, data) for SSE streaming."""
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        from pathlib import Path
+        import aiosqlite
+        
         logger.info("stream user=%r query=%r source=%r", user_id, query, book_source)
-        react_agent, current_docs = self._build(book_source=book_source, book_id=book_id)
-        user_msg = _build_user_msg(query, book_source, memory_context)
+        
+        db_path = Path("data/chat_history.db")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        async for event in react_agent.astream_events(
-            {"messages": [("user", user_msg)]},
-            config={"recursion_limit": 8},
-            version="v2",
-        ):
-            etype = event["event"]
-            if etype == "on_tool_start":
-                yield "tool", event.get("name", "tool")
-            elif etype == "on_chat_model_stream":
-                chunk = event["data"]["chunk"]
-                # Skip tool-call chunks; only forward plain text
-                if chunk.tool_call_chunks:
-                    continue
-                content = chunk.content
-                if isinstance(content, str) and content:
-                    yield "token", content
-                elif isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            text = part.get("text", "")
-                            if text:
-                                yield "token", text
+        # Use a deterministic thread_id based on user and book
+        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
+        
+        # 提取动态上下文并组装为系统指令
+        sys_msg = _build_system_msg(
+            book_title=book_id,
+            book_source=book_source,
+            memory_context=memory_context,
+            selected_text=selected_text,
+            current_chapter=current_chapter,
+        )
+        
+        async with aiosqlite.connect(db_path) as conn:
+            memory = AsyncSqliteSaver(conn)
+            memory.setup() # Ensure tables exist
+            
+            react_agent, current_docs = self._build(book_source=book_source, book_id=book_id, memory=memory, sys_msg=sys_msg)
+
+            async for event in react_agent.astream_events(
+                {"messages": [("user", query)]},
+                config={"configurable": {"thread_id": actual_thread}, "recursion_limit": 8},
+                version="v2",
+            ):
+                etype = event["event"]
+                if etype == "on_tool_start":
+                    yield "tool", event.get("name", "tool")
+                elif etype == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    # Skip tool-call chunks; only forward plain text
+                    if chunk.tool_call_chunks:
+                        continue
+                    content = chunk.content
+                    if isinstance(content, str) and content:
+                        yield "token", content
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                text = part.get("text", "")
+                                if text:
+                                    yield "token", text
 
         citations = build_citations(current_docs)
         yield "done", {

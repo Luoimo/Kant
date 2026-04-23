@@ -20,6 +20,7 @@ export const booksApi = {
 
 export const chatApi = {
   send: (payload) => api.post('/chat', payload, { timeout: 60000 }),
+  history: (bookId) => api.get('/chat/history', { params: bookId ? { book_id: bookId } : {} }),
 }
 
 export const notesApi = {

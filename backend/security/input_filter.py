@@ -178,9 +178,13 @@ def run_lakera_guard_check(user_input: str) -> InputSafetyResult:
                 categories=["lakera_flagged"],
                 sanitized_text=user_input,
             )
-            
-        # Lakera 检查通过后，我们依然可以使用本地规则来做“业务层面的软拦截（跑题）”
-        return run_input_safety_check(user_input)
+        
+        return InputSafetyResult(
+            allowed=True,
+            reason="Lakera Guard 检查通过。",
+            categories=[],
+            sanitized_text=user_input,
+        )
         
     except Exception as e:
         print(f"Lakera Guard 请求失败或超时: {e}，正在回退到本地过滤规则。")

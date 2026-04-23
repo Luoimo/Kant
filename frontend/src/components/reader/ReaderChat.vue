@@ -1,8 +1,9 @@
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onMounted } from 'vue'
 import { NInput } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { fetchSSEStream } from '@/composables/useSSEStream'
+import { chatApi } from '@/api'
 
 const props = defineProps({
   bookId:         { type: String, default: null },
@@ -92,7 +93,8 @@ async function send() {
           updateAiMsg({ content: base + text, isStatus: false })
           if (loading.value) loading.value = false
         },
-        onDone: (evt) => updateAiMsg({ citations: evt.citations ?? [], followups: evt.followups ?? [], streaming: false }),
+        onDone: (evt) => updateAiMsg({ citations: evt.citations ?? [] }),
+        onFollowup: (questions) => updateAiMsg({ followups: questions }),
         onError: (msg) => updateAiMsg({ content: `请求失败：${msg}`, isError: true, isStatus: false, streaming: false }),
       },
     )
@@ -115,6 +117,24 @@ function onKeydown(e) {
 function clearMessages() {
   messages.value = []
 }
+
+onMounted(async () => {
+  if (props.bookId) {
+    try {
+      const res = await chatApi.history(props.bookId)
+      if (res.data && res.data.messages) {
+        messages.value = res.data.messages.map((m, i) => ({
+          id: `hist-${i}`,
+          role: m.role,
+          content: m.content,
+          streaming: false,
+        }))
+      }
+    } catch (e) {
+      console.error('Failed to load chat history:', e)
+    }
+  }
+})
 </script>
 
 <template>
@@ -173,6 +193,7 @@ function clearMessages() {
             </div>
             <!-- Followups -->
             <div v-if="msg.followups && msg.followups.length && !msg.streaming" class="followups">
+              <div class="followups-title">💡 你可以继续追问：</div>
               <button
                 v-for="(f, i) in msg.followups"
                 :key="'f'+i"
@@ -395,28 +416,37 @@ blockquote.quoted-text {
 .followups {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin-top: 3px;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.followups-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
 }
 
 .followup-btn {
   align-self: flex-start;
-  background: white;
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-size: 12px;
-  padding: 5px 12px;
-  border-radius: 14px;
+  background: var(--accent-dim);
+  border: 1px solid transparent;
+  color: var(--accent);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 16px;
   cursor: pointer;
   text-align: left;
-  transition: all 0.2s;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  transition: all 0.2s ease;
+  line-height: 1.4;
 }
 
 .followup-btn:hover {
-  background: var(--bg);
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--accent);
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0,0,0,0.1);
 }
 
 /* ── Typing indicator ── */

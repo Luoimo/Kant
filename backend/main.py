@@ -18,18 +18,23 @@ async def lifespan(app: FastAPI):
     from agents.router_agent import RouterAgent
     from agents.critic_agent import CriticAgent
     from memory.mem0_store import Mem0Store
-    from storage.note_vector_store import make_note_vector_store
     from config import get_settings
 
     settings = get_settings()
-    note_vector_store = make_note_vector_store(settings)
 
-    app.state.agent = DeepReadAgent(note_vector_store=note_vector_store)
-    app.state.note_agent = NoteAgent(note_vector_store=note_vector_store)
+    print("[DEBUG] Initializing DeepReadAgent...")
+    app.state.agent = DeepReadAgent()
+    print("[DEBUG] Initializing NoteAgent...")
+    app.state.note_agent = NoteAgent()
+    print("[DEBUG] Initializing FollowupAgent...")
     app.state.followup_agent = FollowupAgent()
+    print("[DEBUG] Initializing RouterAgent...")
     app.state.router_agent = RouterAgent()
+    print("[DEBUG] Initializing CriticAgent...")
     app.state.critic_agent = CriticAgent()
+    print("[DEBUG] Initializing Mem0Store...")
     app.state.mem0 = Mem0Store()
+    print("[DEBUG] Initialization complete.")
 
     print("[main] app started")
     yield

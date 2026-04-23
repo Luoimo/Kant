@@ -41,15 +41,6 @@ CREATE TABLE IF NOT EXISTS notes (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS plans (
-    plan_id      TEXT PRIMARY KEY,
-    book_id      TEXT NOT NULL UNIQUE,
-    file_path    TEXT NOT NULL,
-    reading_goal TEXT NOT NULL DEFAULT '',
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
-);
 """
 
 
@@ -180,44 +171,6 @@ class NoteCatalog(_DB):
 
 
 # ---------------------------------------------------------------------------
-# PlanCatalog
-# ---------------------------------------------------------------------------
-
-class PlanCatalog(_DB):
-    def upsert(self, *, book_id: str, file_path: str, reading_goal: str = "") -> None:
-        now = datetime.now(tz=timezone.utc).isoformat()
-        plan_id = str(_uuid.uuid4())
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO plans (plan_id, book_id, file_path, reading_goal, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(book_id) DO UPDATE SET
-                    file_path    = excluded.file_path,
-                    reading_goal = excluded.reading_goal,
-                    updated_at   = excluded.updated_at
-                """,
-                (plan_id, book_id, file_path, reading_goal, now, now),
-            )
-
-    def touch(self, book_id: str) -> None:
-        now = datetime.now(tz=timezone.utc).isoformat()
-        with self._connect() as conn:
-            conn.execute("UPDATE plans SET updated_at = ? WHERE book_id = ?", (now, book_id))
-
-    def get_by_book_id(self, book_id: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM plans WHERE book_id = ?", (book_id,)
-            ).fetchone()
-        return dict(row) if row else None
-
-    def delete(self, book_id: str) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM plans WHERE book_id = ?", (book_id,))
-
-
-# ---------------------------------------------------------------------------
 # Factories
 # ---------------------------------------------------------------------------
 
@@ -234,11 +187,7 @@ def get_note_catalog() -> NoteCatalog:
     return NoteCatalog(_db_path())
 
 
-def get_plan_catalog() -> PlanCatalog:
-    return PlanCatalog(_db_path())
-
-
 __all__ = [
-    "BookCatalog", "NoteCatalog", "PlanCatalog",
-    "get_book_catalog", "get_note_catalog", "get_plan_catalog",
+    "BookCatalog", "NoteCatalog",
+    "get_book_catalog", "get_note_catalog",
 ]

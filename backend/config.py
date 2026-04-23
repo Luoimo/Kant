@@ -35,11 +35,13 @@ class Settings(BaseSettings):
     chroma_tenant: str = "default_tenant"
     chroma_database: str = "default_database"
 
+    # Obsidian
+    obsidian_vault: str = ""
+
     # Mem0 记忆管理
     mem0_user_id: str = "kant-user"
     # Note and plan storage
     note_storage_dir: str = "data/notes"
-    plan_storage_dir: str = "data/plans"
 
     # Single collection for all book chunks (agents read from here)
     books_collection_name: str = "kant_library"

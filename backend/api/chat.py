@@ -57,14 +57,21 @@ def _fetch_memory(mem0, query: str) -> str:
 
 
 def _build_query(req: ChatRequest, book_title: str) -> str:
-    query = req.query
-    if book_title:
-        query = f"【当前阅读书籍】：《{book_title}》\n\n{query}"
-    if req.selected_text:
-        query = f"【用户划选的原文片段】：\n{req.selected_text}\n\n【用户问题】：\n{query}"
-    if req.current_chapter:
-        query += f"\n\n【当前阅读章节】：{req.current_chapter}"
-    return query
+    # 彻底弃用前端的系统字符串拼接，返回干净的原始 query。
+    # 动态参数将直接传给 Agent，由 Agent 在内部作为状态或 SystemMessage 处理。
+    return req.query
+
+
+@router.get("/chat/history")
+def get_chat_history(
+    book_id: str | None = None,
+    user_id: str = "default",
+    thread_id: str = "default",
+    request: Request = None
+) -> dict[str, Any]:
+    agent = request.app.state.agent
+    history = agent.get_chat_history(book_id=book_id or "", user_id=user_id, thread_id=thread_id)
+    return {"messages": history}
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -101,9 +108,12 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
         book_id=book_id,
         memory_context=memory_ctx,
         user_id=req.user_id,
+        thread_id=req.thread_id,
+        selected_text=req.selected_text,
+        current_chapter=req.current_chapter,
     )
 
-    if book_title and result.retrieved_docs:
+    if book_title:
         bg.add_task(_run_note_hook, note_agent, req.query, result.answer, book_title, book_id)
 
     if mem0 and result.answer:
@@ -173,6 +183,9 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                 book_id=book_id,
                 memory_context=memory_ctx,
                 user_id=req.user_id,
+                thread_id=req.thread_id,
+                selected_text=req.selected_text,
+                current_chapter=req.current_chapter,
             ):
                 if event_type == "token":
                     answer_parts.append(data)
@@ -192,16 +205,30 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
         full_answer = "".join(answer_parts)
 
         # 3. 后置评估阶段 (CriticAgent) - 直接向用户流式追加评估结果
+        critic_full = ""
         if critic_agent and full_answer:
             try:
                 async for critic_chunk in critic_agent.aevaluate(req.query, docs_text, full_answer):
+                    critic_full += critic_chunk
                     yield f"data: {json.dumps({'type': 'token', 'text': critic_chunk}, ensure_ascii=False)}\n\n"
             except Exception as e:
                 print(f"[chat] critic failed: {e}")
 
         # Post-stream side effects — fire and forget
         tasks: list = []
-        if book_title and docs_count > 0:
+        
+        # 将审查笔记补充到聊天记录中
+        if critic_full:
+            tasks.append(asyncio.to_thread(
+                agent.add_ai_message,
+                content=critic_full,
+                book_id=book_id,
+                user_id=req.user_id,
+                thread_id=req.thread_id
+            ))
+            
+        if book_title:
+            # Removed the docs_count > 0 condition so notes are saved even for casual chat or non-RAG answers
             tasks.append(asyncio.to_thread(
                 _run_note_hook, note_agent, req.query, full_answer, book_title, book_id
             ))
