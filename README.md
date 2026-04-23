@@ -2,7 +2,7 @@
 
 **Kant** 是一个基于 **Agentic AI** 架构设计的深度阅读系统。本项目作为 **AAS Practice Module** 的落地实践，旨在超越单一的“AI 功能”调用，构建一个具备多智能体协作、安全可靠、且具备完整工程化落地的 **Agentic AI 系统**。
 
-通过上传 EPUB 书籍，Kant 能够为用户提供沉浸式的精读问答、结构化的笔记整理、个性化的书单推荐以及科学的阅读计划管理，同时支持多轮对话与长期记忆。
+通过上传 EPUB 书籍，Kant 能够为用户提供沉浸式的精读问答、结构化的笔记整理、个性化的书单推荐以及基于图数据库的深度概念挖掘，同时支持多轮对话与长期记忆。
 
 ---
 
@@ -13,40 +13,42 @@
 ### 1. Agentic AI 系统设计 (多智能体协作)
 系统采用了清晰的 **Router + 专家/评估/后处理 Agent** 架构编排，确保阅读问答场景的高效与严谨。
 - **明确分工**：拥有五个专门的执行 Agent：前端路由分类（RouterAgent）、精读问答检索（DeepReadAgent）、后置客观性与幻觉评估（CriticAgent）、笔记提炼整理（NoteAgent）、以及引导思考（FollowupAgent）。
-- **通信与协调**：采用经典的 Agent 协作模式（Supervisor/Critic 机制与 Hook 机制）。例如，用户提问首先由 RouterAgent 进行意图识别和查询重写优化，然后由 DeepReadAgent 基于 RAG 进行回答，回答结束后同步触发 CriticAgent 进行事实核查，同时触发 NoteAgent 提炼笔记、FollowupAgent 生成追问。
-- **状态管理**：结合 **Mem0** 实现跨会话的用户长期记忆（阅读偏好、知识背景等）。
+- **通信与协调**：采用经典的 Agent 协作模式（Supervisor/Critic 机制与 Hook 机制）。例如，用户提问首先由 RouterAgent 进行意图识别，然后由 DeepReadAgent 基于 RAG 进行回答，回答结束后同步触发 CriticAgent 进行事实核查，同时触发 NoteAgent 调用 Obsidian CLI 提炼并写入笔记、FollowupAgent 生成追问。
+- **状态管理**：结合 **Mem0** 实现跨会话的用户长期记忆（阅读偏好、知识背景等），并使用 **LangGraph Checkpointer (SQLite)** 维护短时聊天上下文。
 
 ### 2. AI Security (大模型安全防御)
 全面识别并缓解大模型应用中的核心风险：
 - **Prompt Injection 与 Adversarial Inputs**：接入 **Lakera Guard** 企业级安全网关（并在本地内置正则兜底规则），有效拦截越狱（Jailbreak）、提示词注入以及恶意系统指令。
 - **敏感信息泄露与系统越权**：拦截尝试在对话中输出 API Key/Token 的行为，严格限制文件系统访问和代码执行请求。
-- **Hallucination（幻觉控制）**：采用高级 **RAG 混合检索架构**（BM25 + ChromaDB 向量 + RRF 融合 + LLM Reranker），强制 Agent **严格基于检索到的原文片段**进行回答，大幅降低幻觉。
+- **Hallucination（幻觉控制）**：采用高级 **RAG 混合检索架构**（BM25 + ChromaDB 向量 + RRF 融合 + LLM Reranker）与 **Neo4j 知识图谱**，强制 Agent **严格基于检索到的原文片段与图谱关系**进行回答，大幅降低幻觉。
 
 ### 3. Explainable & Responsible AI (可解释性与负责任的 AI)
 - **Explainability (可解释性)**：所有来自精读的回答都会附带精确的 **Citations (引用来源)**，并在前端 UI 清晰标明原文出处（书名与章节片段），确保 AI 的回答过程透明、可追溯。
+- **知识网状编织 (Zettelkasten)**：NoteAgent 会自主调用大模型提取核心概念，并在 Obsidian 本地知识库中进行双向链接 (`[[概念]]`) 搜索和写入，让知识脉络对用户完全透明且可控。
 - **Governance & Off-topic Control (治理与控制)**：通过输入过滤器实现“软警告”机制，当用户讨论与“阅读/精读”完全无关的话题时，系统会温和提示，确保 AI 助手保持其核心用途。
 
 ### 4. MLSecOps / LLMSecOps (系统集成与自动化部署)
 具备完整的现代工程化开发流水线：
 - **CI/CD 流水线**：通过 GitHub Actions 配置了自动化的构建与测试流程。
 - **自动化测试**：拥有近 200 个单元与集成测试（Pytest），覆盖核心逻辑。
-- **AI 安全测试 (Security Tests)**：单独设立安全测试模块，每次提交自动验证防御机制（Prompt Injection、文件访问等）是否依然生效，防止安全规则退化。
-- **系统架构设计**：Vue.js / Vite 前端配合 FastAPI 高性能异步后端，采用高度模块化的数据流设计（SQLite 管理元数据，ChromaDB 管理向量，本地存储管理 Markdown 笔记）。
+- **系统架构设计**：Vue 3 / Vite 前端配合 FastAPI 高性能异步后端。核心阅读体验深度集成在单一的 `ReaderView` 中，去除了冗余页面。数据流采用高度模块化的设计（SQLite 管理聊天记录与元数据，ChromaDB 管理向量，Neo4j 管理知识图谱，Obsidian CLI 管理本地 Markdown 笔记）。
 
 ---
 
 ## 架构概览
 
-```
+```text
 EPUB → EpubExtractor → TextCleaner → TextChunker → OpenAI Embeddings → ChromaDB
+                                                 ↘ HanLP NER → Neo4j Graph DB
                                                                            ↓
-用户问题 → FastAPI /chat → RouterAgent（意图分类 & 查询优化）
-                               ├─ Mem0 长期记忆检索
+用户问题 → FastAPI /chat → RouterAgent（意图分类）
+                               ├─ Mem0 长期记忆检索 (Local ChromaDB)
+                               ├─ LangGraph Checkpointer (SQLite 短期记忆)
                                ├─ InputSafetyFilter（每轮安全检查）
                                └─ 核心问答流：
-                                   ├─ DeepReadAgent（主流程：基于 RAG 检索回答，附带证据引用）
+                                   ├─ DeepReadAgent（主流程：基于 Graph + Vector RAG 检索回答，附带证据引用）
                                    ├─ CriticAgent（评估流：同步进行事实核查与客观性审查）
-                                   ├─ NoteAgent（后处理：自动提炼问答生成结构化笔记并持久化）
+                                   ├─ NoteAgent（后处理：自主调用 Obsidian CLI 搜索双向链接并写入 Markdown）
                                    └─ FollowupAgent（后处理：根据对话生成深入追问问题）
 ```
 
@@ -54,38 +56,85 @@ EPUB → EpubExtractor → TextCleaner → TextChunker → OpenAI Embeddings →
 
 ## 目录结构
 
-```
+```text
 backend/
   agents/
-    router_agent.py        前端路由 Agent，负责意图分类和查询重写优化
-    deepread_agent.py      精读问答 Agent，基于检索内容生成带引用的回答
+    router_agent.py        前端路由 Agent，负责意图分类
+    deepread_agent.py      精读问答 Agent，基于检索内容生成带引用的回答 (LangGraph)
     critic_agent.py        评论员 Agent，事实核查与客观性评估（防止幻觉）
-    note_agent.py          笔记整理 Agent，将问答提炼为结构化笔记并持久化
+    note_agent.py          笔记整理 Agent，通过 Obsidian CLI 自动编织卡片盒笔记
     followup_agent.py      追问 Agent，在一轮问答结束后生成相关引导问题
+    obsidian_tools.py      Obsidian CLI 工具封装
   api/
-    chat.py                POST /chat, POST /books/upload, GET /books
-    reader.py              Reader Mode 端点（init/plan/progress）
-    notes.py               笔记端点
-    books.py               书籍管理端点
+    chat.py                POST /chat/stream, GET /chat/history
+    books.py               书籍上传与管理端点
   config.py                Pydantic Settings，读取 .env
+  graph/                   Neo4j 知识图谱与 HanLP 实体抽取模块
   llm/                     OpenAI LLM & Embeddings 封装
   main.py                  FastAPI app 入口
   memory/
-    mem0_store.py          Mem0 长期记忆封装
+    mem0_store.py          Mem0 长期记忆封装 (回退至纯本地 ChromaDB 存储)
   rag/
-    chroma/
-      chroma_store.py      ChromaStore（向量库管理，支持本地/Cloud 双模式）
+    chroma/                ChromaStore 向量库管理
     chunker/               文本切块（TextChunker）
     cleaner/               文本清洗（TextCleaner）
     extracter/             EPUB 解析（EpubExtractor，含封面提取）
-    retriever/
-      hybrid_retriever.py  混合检索（BM25 + 向量 RRF 融合 + 重排）
-      bm25_retriever.py    BM25 关键词检索（jieba 分词）
-      query_rewriter.py    LLM 查询改写
-      reranker.py          LLM / CrossEncoder 重排
+    retriever/             混合检索（BM25 + 向量 RRF 融合 + 重排）
   security/
     input_filter.py        输入安全过滤
   storage/
+    book_catalog.py        SQLite 目录（BookCatalog / NoteCatalog）
+
+data/                      运行时数据（不提交 Git）
+  books/                   EPUB 书库
+  books.db                 书籍与笔记元数据（SQLite）
+  chroma/                  ChromaDB 向量库（本地模式）
+  covers/                  EPUB 封面图片
+  chat_history.db          LangGraph 多轮对话短时记忆检查点（SQLite）
+
+frontend/
+  src/
+    components/
+      reader/              ReaderChat.vue, EpubReader.vue (核心阅读与对话组件)
+    views/                 LibraryView.vue, ReaderView.vue
+```
+
+---
+
+## 快速开始
+
+### 1. 安装依赖
+
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+### 2. 配置 `.env`
+
+```env
+OPENAI_API_KEY=sk-xxxxx
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+
+# 存储路径
+CHROMA_PERSIST_DIR=data/chroma
+BOOKS_DATA_DIR=data/books
+COVERS_DIR=data/covers
+BOOK_CATALOG_DB=data/books.db
+
+# Obsidian 知识库路径配置 (必填)
+OBSIDIAN_VAULT=/path/to/your/obsidian/vault
+
+# Neo4j 图数据库配置 (选填，不填则退回纯向量 RAG)
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=password
+
+# Mem0 长期记忆用户 ID
+MEM0_USER_ID=default_user
+```  storage/
     book_catalog.py        SQLite 目录（BookCatalog / NoteCatalog / PlanCatalog）
     note_storage.py        笔记文件 I/O（LocalNoteStorage）
     plan_storage.py        阅读计划文件 I/O（LocalPlanStorage）
