@@ -1,5 +1,5 @@
 <script setup>
-import { NConfigProvider, NMessageProvider, NNotificationProvider } from 'naive-ui'
+import { NConfigProvider, NDialogProvider, NMessageProvider, NNotificationProvider } from 'naive-ui'
 
 const themeOverrides = {
   common: {
@@ -36,7 +36,9 @@ const themeOverrides = {
   <NConfigProvider :theme-overrides="themeOverrides">
     <NMessageProvider>
       <NNotificationProvider>
-        <RouterView />
+        <NDialogProvider>
+          <RouterView />
+        </NDialogProvider>
       </NNotificationProvider>
     </NMessageProvider>
   </NConfigProvider>

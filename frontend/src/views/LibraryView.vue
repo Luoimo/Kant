@@ -1,12 +1,14 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { NSpin, NEmpty, NTag, NProgress } from 'naive-ui'
+import { NSpin, NEmpty, NTag, NProgress, useDialog, useMessage } from 'naive-ui'
 import { useBooksStore, bookGradient } from '@/stores/books'
 import { useChatStore } from '@/stores/chat'
 
 const router = useRouter()
 const booksStore = useBooksStore()
+const dialog = useDialog()
+const message = useMessage()
 
 onMounted(() => booksStore.fetchBooks())
 
@@ -32,6 +34,24 @@ function openChat(book) {
   const chatStore = useChatStore()
   chatStore.selectedBookId = book.id
   router.push({ name: 'chat', query: { bookId: book.id } })
+}
+
+function confirmDelete(book, event) {
+  event?.stopPropagation?.()
+  dialog.warning({
+    title: '删除书籍',
+    content: `确认删除《${book.title}》？该操作会同时清理向量库、知识图谱、封面、源文件及笔记，且不可恢复。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await booksStore.deleteBook(book.id)
+        message.success(`已删除《${book.title}》`)
+      } catch (e) {
+        message.error(`删除失败：${e?.response?.data?.detail || e.message}`)
+      }
+    },
+  })
 }
 </script>
 
@@ -101,6 +121,13 @@ function openChat(book) {
               class="book-card"
               @click="openReader(book)"
             >
+              <button
+                class="book-delete-btn"
+                title="删除书籍"
+                @click.stop="confirmDelete(book, $event)"
+              >
+                ×
+              </button>
               <div
                 class="book-cover"
                 :style="booksStore.getCoverUrl(book)
@@ -244,11 +271,40 @@ function openChat(book) {
   border: 1px solid var(--border);
   cursor: pointer;
   transition: transform 0.18s, box-shadow 0.18s;
+  position: relative;
 }
 
 .book-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 8px 32px rgba(26,26,46,0.14);
+}
+
+.book-delete-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 16px;
+  line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, transform 0.15s;
+}
+
+.book-card:hover .book-delete-btn {
+  opacity: 1;
+}
+
+.book-delete-btn:hover {
+  background: #c0392b;
+  transform: scale(1.08);
 }
 
 .book-cover {

@@ -229,6 +229,63 @@ class Neo4jStore:
         except Exception as exc:
             logger.warning("Neo4j upsert_book_graph 失败（book_id=%s, err=%s）", book_id, exc)
 
+    def delete_book(self, *, book_id: str) -> None:
+        """从 Neo4j 中移除 Book 节点及其图谱数据。
+
+        清理顺序：
+        1. 复用 _clear_book_graph_scope 删除章节/关系；
+        2. 清除 book_id 作用域内的 Character/Event/Concept 悬挂实体；
+        3. DETACH DELETE Book 节点本身；
+        4. 清理变成孤儿的 Author 节点。
+        """
+        if not self._enabled or self._driver is None or not book_id:
+            return
+        try:
+            with self._driver.session() as session:
+                self._clear_book_graph_scope(session=session, book_id=book_id)
+                session.run(
+                    """
+                    MATCH (e:Event {book_id: $book_id})
+                    DETACH DELETE e
+                    """,
+                    {"book_id": book_id},
+                ).consume()
+                session.run(
+                    """
+                    MATCH (b:Book {book_id: $book_id})-[:HAS_CHARACTER]->(p:Character)
+                    WHERE NOT EXISTS {
+                        MATCH (other:Book)-[:HAS_CHARACTER]->(p)
+                        WHERE other.book_id <> $book_id
+                    }
+                    DETACH DELETE p
+                    """,
+                    {"book_id": book_id},
+                ).consume()
+                session.run(
+                    """
+                    MATCH (b:Book {book_id: $book_id})
+                    DETACH DELETE b
+                    """,
+                    {"book_id": book_id},
+                ).consume()
+                session.run(
+                    """
+                    MATCH (a:Author)
+                    WHERE NOT (a)-[:WROTE]->(:Book)
+                    DELETE a
+                    """
+                ).consume()
+                session.run(
+                    """
+                    MATCH (c:Concept)
+                    WHERE NOT (c)--()
+                    DELETE c
+                    """
+                ).consume()
+            logger.info("Neo4j 已删除 Book 节点及相关图谱（book_id=%s）", book_id)
+        except Exception as exc:
+            logger.warning("Neo4j delete_book 失败（book_id=%s, err=%s）", book_id, exc)
+
     def _prepare_graph_payloads(
         self,
         *,

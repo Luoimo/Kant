@@ -11,7 +11,7 @@ from config import get_settings
 from graph.neo4j_store import get_neo4j_store
 from rag.chroma.chroma_store import ChromaStore
 from rag.extracter.epub_extractor import EpubExtractor
-from storage.book_catalog import get_book_catalog
+from storage.book_catalog import get_book_catalog, get_note_catalog
 
 router = APIRouter(prefix="/books", tags=["books"])
 
@@ -35,6 +35,14 @@ class IngestResponse(BaseModel):
     total_chunks: int
     added: int
     skipped: int
+
+
+class DeleteResponse(BaseModel):
+    id: str
+    deleted_chunks: int
+    removed_source_file: bool
+    removed_cover: bool
+    removed_note: bool
 
 
 @router.get("", response_model=list[BookEntry])
@@ -116,4 +124,76 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
         total_chunks=result.total_chunks,
         added=result.added,
         skipped=result.skipped,
+    )
+
+
+@router.delete("/{book_id}", response_model=DeleteResponse)
+def delete_book(book_id: str) -> DeleteResponse:
+    """级联删除指定书籍：向量库 chunk、图谱、目录、封面、源文件、笔记。"""
+    catalog = get_book_catalog()
+    book = catalog.get_by_id(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="书籍不存在")
+
+    source = book.get("source") or ""
+    cover_path = book.get("cover_path") or ""
+
+    deleted_chunks = 0
+    try:
+        store = ChromaStore()
+        if source:
+            deleted_chunks = store.delete_source(source)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"向量库清理失败：{exc}") from exc
+
+    try:
+        get_neo4j_store().delete_book(book_id=book_id)
+    except Exception:
+        # Neo4j 未连接或异常已在内部降级，这里再兜底一次。
+        pass
+
+    note_catalog = get_note_catalog()
+    note_meta = note_catalog.get_by_book_id(book_id)
+    removed_note = False
+    if note_meta:
+        note_file = Path(note_meta.get("file_path") or "")
+        if note_file.is_file():
+            try:
+                note_file.unlink()
+                removed_note = True
+            except OSError:
+                removed_note = False
+        note_catalog.delete(book_id)
+
+    removed_source_file = False
+    if source:
+        src_path = Path(source)
+        if src_path.is_file():
+            try:
+                src_path.unlink()
+                removed_source_file = True
+            except OSError:
+                removed_source_file = False
+
+    removed_cover = False
+    if cover_path:
+        cover_file = Path(cover_path)
+        if not cover_file.is_absolute():
+            settings = get_settings()
+            cover_file = Path(settings.covers_dir) / cover_file.name
+        if cover_file.is_file():
+            try:
+                cover_file.unlink()
+                removed_cover = True
+            except OSError:
+                removed_cover = False
+
+    catalog.delete(book_id)
+
+    return DeleteResponse(
+        id=book_id,
+        deleted_chunks=deleted_chunks,
+        removed_source_file=removed_source_file,
+        removed_cover=removed_cover,
+        removed_note=removed_note,
     )

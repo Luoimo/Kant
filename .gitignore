@@ -55,3 +55,18 @@ frontend/node_modules
 .history/
 .idea/
 .venv312/
+
+backend/Kant.spec
+
+# PyInstaller 打包产物
+backend/build/
+backend/dist/
+backend/.pyinstaller_cache/
+*.spec
+
+# 前端构建产物
+frontend/dist/
+frontend/.vite/
+
+# 本地桌面数据目录（打包运行时生成）
+.KantData/

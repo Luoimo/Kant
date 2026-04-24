@@ -16,6 +16,7 @@ export const booksApi = {
       onUploadProgress: onProgress,
     })
   },
+  remove: (bookId) => api.delete(`/books/${bookId}`, { timeout: 60000 }),
 }
 
 export const chatApi = {

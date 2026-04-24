@@ -50,6 +50,12 @@ export const useBooksStore = defineStore('books', () => {
     return data
   }
 
+  async function deleteBook(bookId) {
+    const { data } = await booksApi.remove(bookId)
+    books.value = books.value.filter((b) => b.id !== bookId)
+    return data
+  }
+
   function getCoverUrl(book) {
     if (!book?.cover_path) return null
     const filename = book.cover_path.split(/[/\\]/).pop()
@@ -65,6 +71,7 @@ export const useBooksStore = defineStore('books', () => {
     currentBook,
     fetchBooks,
     uploadBook,
+    deleteBook,
     getCoverUrl,
   }
 })
