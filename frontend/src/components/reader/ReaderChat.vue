@@ -1,9 +1,12 @@
 <script setup>
 import { ref, watch, nextTick, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { NInput } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { fetchSSEStream } from '@/composables/useSSEStream'
 import { chatApi } from '@/api'
+
+const { t, locale } = useI18n()
 
 const props = defineProps({
   bookId:         { type: String, default: null },
@@ -80,10 +83,11 @@ async function send() {
         user_id: 'default',
         selected_text: selectedText,
         current_chapter: props.currentChapter || null,
+        locale: locale.value,
       },
       {
         onThinking: () => {
-          updateAiMsg({ content: '正在思考…', isStatus: true })
+          updateAiMsg({ content: t('chat.thinking'), isStatus: true })
           loading.value = false
         },
         onStatus: (text) => updateAiMsg({ content: text, isStatus: true }),
@@ -95,11 +99,11 @@ async function send() {
         },
         onDone: (evt) => updateAiMsg({ citations: evt.citations ?? [] }),
         onFollowup: (questions) => updateAiMsg({ followups: questions }),
-        onError: (msg) => updateAiMsg({ content: `请求失败：${msg}`, isError: true, isStatus: false, streaming: false }),
+        onError: (msg) => updateAiMsg({ content: t('chat.requestFailed', { msg }), isError: true, isStatus: false, streaming: false }),
       },
     )
   } catch (e) {
-    updateAiMsg({ content: `请求失败：${e.message}`, isError: true, streaming: false })
+    updateAiMsg({ content: t('chat.requestFailed', { msg: e.message }), isError: true, streaming: false })
   } finally {
     loading.value = false
     const msg = messages.value.find((m) => m.id === aiMsgId)
@@ -114,8 +118,13 @@ function onKeydown(e) {
   }
 }
 
-function clearMessages() {
+async function clearMessages() {
   messages.value = []
+  try {
+    await chatApi.clearHistory(props.bookId || null, 'reader-default')
+  } catch (e) {
+    console.error('Failed to clear chat history on server:', e)
+  }
 }
 
 onMounted(async () => {
@@ -141,8 +150,8 @@ onMounted(async () => {
   <div class="reader-chat">
     <!-- Header -->
     <div class="chat-header">
-      <span class="chat-title">AI 问答</span>
-      <button v-if="messages.length" class="clear-btn" @click="clearMessages">清空</button>
+      <span class="chat-title">{{ t('chat.title') }}</span>
+      <button v-if="messages.length" class="clear-btn" @click="clearMessages">{{ t('chat.clear') }}</button>
     </div>
 
     <!-- Messages -->
@@ -150,8 +159,8 @@ onMounted(async () => {
       <!-- Empty hint -->
       <div v-if="messages.length === 0" class="empty-hint">
         <div class="hint-icon">💬</div>
-        <p class="hint-text">选取左侧文字，或直接输入问题</p>
-        <p class="hint-sub">AI 将结合书籍内容有根据地回答</p>
+        <p class="hint-text">{{ t('chat.emptyTip') }}</p>
+        <p class="hint-sub">{{ t('chat.emptySub') }}</p>
       </div>
 
       <TransitionGroup name="msg" tag="div" class="msg-list">
@@ -162,7 +171,7 @@ onMounted(async () => {
           :class="msg.role"
         >
           <div class="avatar" :class="msg.role === 'ai' ? 'ai-avatar' : 'user-avatar'">
-            {{ msg.role === 'ai' ? '🤖' : '你' }}
+            {{ msg.role === 'ai' ? '🤖' : t('chat.you') }}
           </div>
           <div class="bubble-wrap">
             <div class="bubble" :class="{ error: msg.isError }">
@@ -193,7 +202,7 @@ onMounted(async () => {
             </div>
             <!-- Followups -->
             <div v-if="msg.followups && msg.followups.length && !msg.streaming" class="followups">
-              <div class="followups-title">💡 你可以继续追问：</div>
+              <div class="followups-title">{{ t('chat.followupsTitle') }}</div>
               <button
                 v-for="(f, i) in msg.followups"
                 :key="'f'+i"
@@ -230,7 +239,7 @@ onMounted(async () => {
           v-model:value="inputText"
           type="textarea"
           :autosize="{ minRows: 1, maxRows: 4 }"
-          :placeholder="selectedText ? '针对划选文字提问…' : '输入问题，Enter 发送…'"
+          :placeholder="selectedText ? t('chat.placeholderSelected') : t('chat.placeholderDefault')"
           :disabled="loading"
           @keydown="onKeydown"
           class="chat-input"

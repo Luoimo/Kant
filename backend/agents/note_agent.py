@@ -22,47 +22,23 @@ from langgraph.prebuilt import create_react_agent
 
 from config import get_settings
 from llm.openai_client import get_llm
+from prompts import get_prompts
 from storage.book_catalog import get_note_catalog
 from utils.text import safe_id
-from agents.obsidian_tools import TOOLS
+
+
+def _load_note_tools():
+    """按 settings.note_backend 选择笔记后端工具集。"""
+    backend = (get_settings().note_backend or "obsidian").lower()
+    if backend == "notion":
+        from agents.notion_tools import TOOLS as _TOOLS
+        logging.getLogger(__name__).info("NoteAgent backend=notion")
+        return _TOOLS
+    from agents.obsidian_tools import TOOLS as _TOOLS
+    logging.getLogger(__name__).info("NoteAgent backend=obsidian")
+    return _TOOLS
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# LLM 提炼提示词
-# ---------------------------------------------------------------------------
-
-_EXTRACT_SYSTEM = """你是读书笔记整理助手。从用户与AI的对话中提炼关键信息。
-只输出合法JSON，不要有多余文字或代码块标记。"""
-
-_EXTRACT_TEMPLATE = """\
-用户问题：{question}
-
-AI回答：{answer}
-
-请提炼以下信息并以JSON输出：
-{{
-  "question_summary": "用户疑惑的核心，一句话，15字以内",
-  "answer_keypoints": ["回答要点1", "回答要点2"],
-  "followup_questions": ["值得继续探究的问题1", "问题2"],
-  "concepts": ["核心概念1", "概念2", "概念3"]
-}}"""
-
-_AGENT_SYSTEM_PROMPT = """你是一个具有极高自主性的卡片盒笔记法 (Zettelkasten) 专家。
-当前用户正在阅读《{book_title}》。这是刚才的一轮问答：
-【用户疑问】：{question}
-【AI回答】：{answer}
-
-系统已经为你初步提炼了以下要素：
-- 疑问核心：{summary}
-- 核心概念：{concepts}
-
-【你的任务】
-1. 利用 search_vault_for_concept 工具去 Obsidian 知识库中搜索上述“核心概念”，看看其他书籍是否也有相关笔记。
-2. 整合问答内容和搜索到的跨书关联，撰写一段格式优美、带有 Obsidian 双向链接（如 [[其他书名]]）和标签（如 #概念）的 Markdown 笔记。
-3. 必须调用 append_note_to_obsidian 工具，将写好的笔记保存到知识库中（注意传入 file 参数时直接使用书名，如 '{book_title}'）。
-4. 完成保存后，结束任务并告诉用户你做了哪些知识串联。
-"""
 
 # ---------------------------------------------------------------------------
 # 数据类
@@ -104,23 +80,39 @@ class NoteAgent:
         self._notes_dir.mkdir(parents=True, exist_ok=True)
         self._llm = llm or get_llm(temperature=0.1)
         
-        # 初始化 Obsidian ReAct Agent
-        self._tools = TOOLS
+        # 初始化 ReAct Agent（按配置选择 Obsidian 或 Notion 后端）
+        self._tools = _load_note_tools()
         self._agent_executor = create_react_agent(
             self._llm,
             tools=self._tools
         )
 
     def process_qa(
-        self, question: str, answer: str, book_title: str, book_id: str = ""
+        self, question: str, answer: str, book_title: str, book_id: str = "",
+        *, locale: str | None = None,
     ) -> NoteEntry | None:
         """deepread_book 后自动调用。提炼问答、触发 Agent 并入库。"""
         if not book_title:
             return None
 
+        prompts = get_prompts(locale).note
+        obs_prompts = get_prompts(locale).obsidian
+
+        # Update tool descriptions per-locale before handing tools to the ReAct agent.
+        try:
+            for t in self._tools:
+                if t.name == "read_past_notes":
+                    t.description = obs_prompts.read_past_desc
+                elif t.name == "search_vault_for_concept":
+                    t.description = obs_prompts.search_vault_desc
+                elif t.name == "append_note_to_obsidian":
+                    t.description = obs_prompts.append_note_desc
+        except Exception as e:
+            logger.debug("update obsidian tool desc failed: %s", e)
+
         # 1. 提取结构化数据 (用于 VectorDB 和时间轴)
         try:
-            extracted = self._extract(question, answer)
+            extracted = self._extract(question, answer, prompts=prompts)
         except Exception as e:
             logger.warning("extraction failed: %s", e)
             return None
@@ -134,19 +126,17 @@ class NoteAgent:
         # 2. 让 Agent 自主执行 Obsidian 搜索和写入
         try:
             logger.info("Starting Obsidian Note Agent for %s", book_title)
-            
-            # Format the system prompt with variables for this specific run
-            # Since create_react_agent uses the modifier globally, we can just pass the formatted task in the human message
-            task_msg = _AGENT_SYSTEM_PROMPT.format(
+
+            task_msg = prompts.agent_system_template.format(
                 book_title=book_title,
                 question=question,
                 answer=answer,
                 summary=entry.question_summary,
-                concepts=", ".join(entry.concepts)
+                concepts=", ".join(entry.concepts),
             )
-            
+
             self._agent_executor.invoke({
-                "messages": [HumanMessage(content=task_msg + "\n\n请开始执行笔记整理任务。请务必最后调用 append_note_to_obsidian 工具进行保存。")]
+                "messages": [HumanMessage(content=task_msg + prompts.agent_task_suffix)]
             })
         except Exception as e:
             logger.error("Obsidian Agent execution failed: %s", e)
@@ -172,10 +162,11 @@ class NoteAgent:
         safe = re.sub(r'[<>:"/\\|?*《》【】\r\n]', "_", book_title).strip("_. ") or "unknown"
         return self._notes_dir / f"{safe}.md"
 
-    def _extract(self, question: str, answer: str) -> dict:
+    def _extract(self, question: str, answer: str, *, prompts=None) -> dict:
+        prompts = prompts or get_prompts().note
         msgs = [
-            SystemMessage(content=_EXTRACT_SYSTEM),
-            HumanMessage(content=_EXTRACT_TEMPLATE.format(
+            SystemMessage(content=prompts.extract_system),
+            HumanMessage(content=prompts.extract_template.format(
                 question=question[:800],
                 answer=answer[:1500],
             )),

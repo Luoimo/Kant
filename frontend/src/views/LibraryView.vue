@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { NSpin, NEmpty, NTag, NProgress, useDialog, useMessage } from 'naive-ui'
 import { useBooksStore, bookGradient } from '@/stores/books'
 import { useChatStore } from '@/stores/chat'
@@ -9,17 +10,23 @@ const router = useRouter()
 const booksStore = useBooksStore()
 const dialog = useDialog()
 const message = useMessage()
+const { t, locale } = useI18n()
 
 onMounted(() => booksStore.fetchBooks())
 
 const currentBook = computed(() => booksStore.currentBook)
 
-const STATUS_LABEL = { unread: '未读', reading: '在读', done: '已完成' }
+const STATUS_LABEL = computed(() => ({
+  unread: t('library.statusUnread'),
+  reading: t('library.statusReading'),
+  done: t('library.statusDone'),
+}))
 const STATUS_TYPE = { unread: 'default', reading: 'warning', done: 'success' }
 
 function formatDate(iso) {
   if (!iso) return ''
-  return new Date(iso).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  const tag = locale.value === 'zh-CN' ? 'zh-CN' : 'en-US'
+  return new Date(iso).toLocaleDateString(tag, { month: 'short', day: 'numeric' })
 }
 
 function pct(book) {
@@ -39,16 +46,16 @@ function openChat(book) {
 function confirmDelete(book, event) {
   event?.stopPropagation?.()
   dialog.warning({
-    title: '删除书籍',
-    content: `确认删除《${book.title}》？该操作会同时清理向量库、知识图谱、封面、源文件及笔记，且不可恢复。`,
-    positiveText: '确认删除',
-    negativeText: '取消',
+    title: t('library.deleteBook'),
+    content: t('library.deleteConfirm', { title: book.title }),
+    positiveText: t('library.deleteConfirmBtn'),
+    negativeText: t('common.cancel'),
     onPositiveClick: async () => {
       try {
         await booksStore.deleteBook(book.id)
-        message.success(`已删除《${book.title}》`)
+        message.success(t('library.deleted', { title: book.title }))
       } catch (e) {
-        message.error(`删除失败：${e?.response?.data?.detail || e.message}`)
+        message.error(t('library.deleteFailed', { msg: e?.response?.data?.detail || e.message }))
       }
     },
   })
@@ -59,19 +66,19 @@ function confirmDelete(book, event) {
   <div class="library-view">
     <!-- ── Topbar ── -->
     <div class="topbar">
-      <h1 class="page-title">我的书库</h1>
+      <h1 class="page-title">{{ t('library.pageTitle') }}</h1>
       <div class="topbar-count" v-if="!booksStore.loading">
-        {{ booksStore.books.length }} 本书
+        {{ t('library.bookCount', { count: booksStore.books.length }) }}
       </div>
     </div>
 
     <div class="content">
-      <NSpin :show="booksStore.loading" description="加载中…">
+      <NSpin :show="booksStore.loading" :description="t('common.loading')">
 
         <!-- Currently Reading Hero -->
         <template v-if="currentBook">
           <div class="section-header">
-            <span class="section-title">当前在读</span>
+            <span class="section-title">{{ t('library.currentReading') }}</span>
           </div>
           <div class="hero-card">
             <div
@@ -86,7 +93,7 @@ function confirmDelete(book, event) {
             </div>
             <div class="hero-info">
               <NTag type="warning" size="small" :bordered="false" class="reading-tag">
-                正在阅读
+                {{ t('library.readingTag') }}
               </NTag>
               <h2 class="hero-title">{{ currentBook.title }}</h2>
               <p class="hero-author">{{ currentBook.author }}</p>
@@ -99,12 +106,12 @@ function confirmDelete(book, event) {
                   :rail-color="'#e4ddd2'"
                   :height="6"
                 />
-                <span class="progress-label">{{ pct(currentBook) }}% 完成</span>
+                <span class="progress-label">{{ t('library.progressPct', { pct: pct(currentBook) }) }}</span>
               </div>
             </div>
             <div class="hero-actions">
-              <button class="btn-primary" @click="openReader(currentBook)">继续阅读</button>
-              <button class="btn-ghost" @click="openChat(currentBook)">向 AI 提问</button>
+              <button class="btn-primary" @click="openReader(currentBook)">{{ t('library.continueReading') }}</button>
+              <button class="btn-ghost" @click="openChat(currentBook)">{{ t('library.askAi') }}</button>
             </div>
           </div>
         </template>
@@ -112,7 +119,7 @@ function confirmDelete(book, event) {
         <!-- All Books Grid -->
         <div v-if="booksStore.books.length > 0">
           <div class="section-header" style="margin-top: 28px;">
-            <span class="section-title">全部书籍</span>
+            <span class="section-title">{{ t('library.allBooks') }}</span>
           </div>
           <div class="book-grid">
             <div
@@ -123,7 +130,7 @@ function confirmDelete(book, event) {
             >
               <button
                 class="book-delete-btn"
-                title="删除书籍"
+                :title="t('library.deleteBook')"
                 @click.stop="confirmDelete(book, $event)"
               >
                 ×
@@ -164,7 +171,7 @@ function confirmDelete(book, event) {
         <!-- Empty state -->
         <NEmpty
           v-else-if="!booksStore.loading"
-          description="书库空空如也，点击左侧「导入书籍」开始阅读"
+          :description="t('library.emptyTip')"
           style="margin-top: 80px;"
         />
       </NSpin>

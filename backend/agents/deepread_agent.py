@@ -12,6 +12,7 @@ from langchain_core.tools import tool
 
 from graph.neo4j_store import get_neo4j_store
 from llm.openai_client import get_llm
+from prompts import get_prompts
 from rag.chroma.chroma_store import ChromaStore
 from rag.retriever import HybridConfig, HybridRetriever
 from xai.citation import Citation, build_citations
@@ -45,36 +46,9 @@ class DeepReadConfig:
     graph_chunk_k: int = 24
 
 
-_SYSTEM_PROMPT_BASE = """\
-你是"阅读助手"，帮助用户深度理解哲学和社科书籍。
-
-工具说明：
-- search_book_content  : 在用户本地书库检索原文证据。回答书中内容问题时必须调用。
-- search_past_notes    : 检索用户的历史读书笔记。当用户询问以前的思考、或者需要跨书串联知识时调用。
-
-工作原则（防幻觉与客观性要求）：
-1. 书中内容问答 — 必须有 search_book_content 的证据支撑。如果检索到的证据不足以回答问题，你必须明确回答『根据书本内容，无法直接回答该问题』或『书中未提及相关内容』，绝对不要使用外部知识编造或猜测书中事实（Hallucination Mitigation）。
-2. 解释概念与跨书对比（公平性与偏见控制） — 在解释哲学概念或做跨书观点对比时，必须体现多元化（Diversity），涵盖不同文化背景、流派或视角的观点，避免单一维度的偏见（Bias Mitigation），确保内容客观公平（Fairness）。
-
-输出格式：
-- 内容问答：结构化回答 + 末尾「引用」小节（书名·章节）
-"""
-
-_GRAPH_AWARE_APPENDIX = """\
-Graph-aware 证据融合规则（当 search_book_content 返回图结构块时生效）：
-1. 你会同时收到两类证据：
-   - [证据i]：向量检索命中的原文片段（可直接引用的文本证据）。
-   - [图检索子图]：图谱结构信息（种子节点/扩散节点/关联章节/关系路径），用于关系推理与上下文补全。
-2. 证据职责分工：
-   - 事实性表述、原话、细节优先依赖 [证据i]。
-   - 关系、依赖、层级、角色互动优先依赖 [图检索子图]。
-3. 若两类证据不一致：
-   - 明确指出差异；
-   - 不要编造不存在于任一证据源的信息；
-   - 优先采用可被原文片段直接验证的结论。
-4. 输出时若使用了图结构推理，需单独给出「图结构依据」小节，避免把结构推理伪装成原文引用。
-"""
-_SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE + _GRAPH_AWARE_APPENDIX
+_SYSTEM_PROMPT_BASE = None  # kept for backward compat; real prompts come from prompts module
+_GRAPH_AWARE_APPENDIX = None
+_SYSTEM_PROMPT = None
 
 
 def _build_system_msg(
@@ -83,20 +57,23 @@ def _build_system_msg(
     memory_context: str,
     selected_text: str | None,
     current_chapter: str | None,
+    *,
+    locale: str | None = None,
 ) -> str:
     """Build dynamic context to inject into the system prompt instead of user message."""
+    p = get_prompts(locale).deepread
     parts = []
     if book_title:
-        parts.append(f"【当前阅读书籍】：《{book_title}》")
+        parts.append(p.ctx_current_book.format(title=book_title))
     if book_source:
-        parts.append(f"【当前书籍来源】：{book_source}")
+        parts.append(p.ctx_book_source.format(source=book_source))
     if current_chapter:
-        parts.append(f"【当前阅读章节】：{current_chapter}")
+        parts.append(p.ctx_current_chapter.format(chapter=current_chapter))
     if selected_text:
-        parts.append(f"【用户当前划选的原文片段】（用户的问题可能针对这段话）：\n{selected_text}")
+        parts.append(p.ctx_selected_text.format(text=selected_text))
     if memory_context:
-        parts.append(f"【用户历史阅读记录】（仅供参考，用于个性化回答）：\n{memory_context}")
-        
+        parts.append(p.ctx_memory.format(memory=memory_context))
+
     return "\n\n".join(parts) if parts else ""
 
 
@@ -116,16 +93,17 @@ class DeepReadAgent:
         self.config = config or DeepReadConfig()
         self._collection_name = collection_name or self.store.collection_name
 
-    def _build(self, *, book_source: str | None, book_id: str, memory=None, sys_msg: str = ""):
+    def _build(self, *, book_source: str | None, book_id: str, memory=None, sys_msg: str = "", locale: str | None = None):
         """Build a react_agent with bound tool closures. Returns (agent, current_docs)."""
         current_docs: list[Document] = []
         store = self.store
         config = self.config
         collection_name = self._collection_name
         llm = self.llm
-        
-        # Combine the static _SYSTEM_PROMPT with any dynamic context
-        full_system_prompt = _SYSTEM_PROMPT
+        prompts = get_prompts(locale).deepread
+
+        # Compose the full system prompt from the locale-specific bundle.
+        full_system_prompt = prompts.system_base + prompts.graph_aware_appendix
         if sys_msg:
             full_system_prompt += f"\n\n[System Context Update]\n{sys_msg}"
 
@@ -191,22 +169,20 @@ class DeepReadAgent:
             paths = [str(x) for x in (payload.get("reasoning_paths") or []) if str(x).strip()][:12]
             if not (seeds or expanded or chapters or paths):
                 return ""
-            lines = ["[图检索子图]"]
+            lines = [prompts.graph_block_title]
             if seeds:
-                lines.append("种子节点: " + " / ".join(seeds))
+                lines.append(prompts.graph_seeds + " / ".join(seeds))
             if expanded:
-                lines.append("扩散节点: " + " / ".join(expanded))
+                lines.append(prompts.graph_expanded + " / ".join(expanded))
             if chapters:
-                lines.append("关联章节: " + " / ".join(chapters))
+                lines.append(prompts.graph_chapters + " / ".join(chapters))
             if paths:
-                lines.append("关系路径: " + " | ".join(paths))
+                lines.append(prompts.graph_paths + " | ".join(paths))
             return "\n".join(lines)
 
         @tool
         def search_book_content(search_query: str) -> str:
-            """在用户本地书库中检索原文证据片段。
-            输入精简的搜索关键词；证据不足时可换关键词再调用一次。
-            """
+            """Search the user's local library for textual evidence."""
             hybrid_cfg = config.hybrid or HybridConfig(
                 fetch_k=config.fetch_k,
                 final_k=config.k,
@@ -236,7 +212,7 @@ class DeepReadAgent:
             )
             graph_block = _build_graph_block(graph_payload)
             if not docs and not graph_block:
-                return "未找到相关内容，请尝试换一种关键词。"
+                return prompts.no_results
 
             seen = {d.page_content[:100] for d in current_docs}
             for d in docs:
@@ -249,24 +225,24 @@ class DeepReadAgent:
             blocks: list[str] = []
             for i, d in enumerate(display, 1):
                 meta = d.metadata or {}
-                title = meta.get("book_title") or "未知书名"
+                title = meta.get("book_title") or prompts.evidence_unknown_book
                 location = meta.get("section_title") or meta.get("chapter_title") or ""
-                blocks.append(
-                    f"[证据{i}] 书名：{title}  章节：{location}\n"
-                    + (d.page_content or "").strip()[:600]
-                )
+                header = prompts.evidence_header.format(i=i, title=title, location=location)
+                blocks.append(header + "\n" + (d.page_content or "").strip()[:600])
             if graph_block:
                 blocks.append(graph_block)
             logger.info("blocks=%r", blocks)
             return sep.join(blocks)
 
+        search_book_content.description = prompts.tool_search_book_desc
+
         @tool
         def search_past_notes(query: str) -> str:
-            """检索用户的历史读书笔记。
-            当用户询问“我之前记过什么”、“关于某某概念我以前有什么想法”，或你需要跨书串联知识时调用。
-            """
+            """Retrieve user's past notes."""
             from agents.obsidian_tools import search_vault_for_concept
             return search_vault_for_concept.invoke(query)
+
+        search_past_notes.description = prompts.tool_search_notes_desc
 
         from langgraph.prebuilt import create_react_agent
         
@@ -343,6 +319,32 @@ class DeepReadAgent:
             logger.error("Failed to load chat history: %s", e)
             return []
 
+    def clear_chat_history(
+        self,
+        *,
+        book_id: str = "",
+        user_id: str = "default",
+        thread_id: str = "default",
+    ) -> None:
+        """Clear chat history for a given user and book."""
+        from pathlib import Path
+        import sqlite3
+        
+        db_path = Path("data/chat_history.db")
+        if not db_path.exists():
+            return
+            
+        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
+        
+        try:
+            with sqlite3.connect(db_path, check_same_thread=False) as conn:
+                conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (actual_thread,))
+                conn.execute("DELETE FROM writes WHERE thread_id = ?", (actual_thread,))
+                conn.commit()
+                logger.info("Successfully cleared chat history for thread %s", actual_thread)
+        except Exception as e:
+            logger.error("Failed to clear chat history: %s", e)
+
     def add_ai_message(
         self,
         content: str,
@@ -350,24 +352,25 @@ class DeepReadAgent:
         book_id: str = "",
         user_id: str = "default",
         thread_id: str = "default",
+        locale: str | None = None,
     ) -> None:
         """Manually append an AI message (e.g. from CriticAgent) to the chat history."""
         from langgraph.checkpoint.sqlite import SqliteSaver
         from pathlib import Path
         import sqlite3
         from langchain_core.messages import AIMessage
-        
+
         db_path = Path("data/chat_history.db")
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
-        
+
         try:
             with sqlite3.connect(db_path, check_same_thread=False) as conn:
                 memory = SqliteSaver(conn)
                 memory.setup()
-                
-                react_agent, _ = self._build(book_source=None, book_id=book_id, memory=memory)
+
+                react_agent, _ = self._build(book_source=None, book_id=book_id, memory=memory, locale=locale)
                 react_agent.update_state(
                     {"configurable": {"thread_id": actual_thread}},
                     {"messages": [AIMessage(content=content)]}
@@ -387,39 +390,44 @@ class DeepReadAgent:
         thread_id: str = "default",
         selected_text: str | None = None,
         current_chapter: str | None = None,
+        locale: str | None = None,
     ) -> DeepReadResult:
         from langgraph.checkpoint.sqlite import SqliteSaver
         from pathlib import Path
         import sqlite3
-        
-        logger.info("run user=%r query=%r source=%r", user_id, query, book_source)
-        
+
+        logger.info("run user=%r query=%r source=%r locale=%r", user_id, query, book_source, locale)
+
         db_path = Path("data/chat_history.db")
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Use a deterministic thread_id based on user and book so chat history is maintained
         actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
-        
+
         # 提取动态上下文并组装为系统指令
         sys_msg = _build_system_msg(
-            book_title=book_id,  # For simplistic implementation here
+            book_title=book_id,
             book_source=book_source,
             memory_context=memory_context,
             selected_text=selected_text,
             current_chapter=current_chapter,
+            locale=locale,
         )
-        
+
         with sqlite3.connect(db_path, check_same_thread=False) as conn:
             memory = SqliteSaver(conn)
-            memory.setup() # Ensure tables exist
-            
-            react_agent, current_docs = self._build(book_source=book_source, book_id=book_id, memory=memory, sys_msg=sys_msg)
-            
+            memory.setup()
+
+            react_agent, current_docs = self._build(
+                book_source=book_source, book_id=book_id, memory=memory,
+                sys_msg=sys_msg, locale=locale,
+            )
+
             result = react_agent.invoke(
                 {"messages": [("user", query)]},
                 config={"configurable": {"thread_id": actual_thread}, "recursion_limit": 8},
             )
-            
+
         answer = result["messages"][-1].content
         citations = build_citations(current_docs)
         return DeepReadResult(
@@ -439,34 +447,37 @@ class DeepReadAgent:
         thread_id: str = "default",
         selected_text: str | None = None,
         current_chapter: str | None = None,
+        locale: str | None = None,
     ) -> AsyncGenerator[tuple[str, object], None]:
         """Async generator yielding (event_type, data) for SSE streaming."""
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from pathlib import Path
         import aiosqlite
-        
-        logger.info("stream user=%r query=%r source=%r", user_id, query, book_source)
-        
+
+        logger.info("stream user=%r query=%r source=%r locale=%r", user_id, query, book_source, locale)
+
         db_path = Path("data/chat_history.db")
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Use a deterministic thread_id based on user and book
         actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
-        
-        # 提取动态上下文并组装为系统指令
+
         sys_msg = _build_system_msg(
             book_title=book_id,
             book_source=book_source,
             memory_context=memory_context,
             selected_text=selected_text,
             current_chapter=current_chapter,
+            locale=locale,
         )
-        
+
         async with aiosqlite.connect(db_path) as conn:
             memory = AsyncSqliteSaver(conn)
-            memory.setup() # Ensure tables exist
-            
-            react_agent, current_docs = self._build(book_source=book_source, book_id=book_id, memory=memory, sys_msg=sys_msg)
+            memory.setup()
+
+            react_agent, current_docs = self._build(
+                book_source=book_source, book_id=book_id, memory=memory,
+                sys_msg=sys_msg, locale=locale,
+            )
 
             async for event in react_agent.astream_events(
                 {"messages": [("user", query)]},

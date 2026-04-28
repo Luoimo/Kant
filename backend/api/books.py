@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Request
 from pydantic import BaseModel
 
 from config import get_settings
@@ -128,12 +128,17 @@ async def upload_book(file: UploadFile = File(...)) -> IngestResponse:
 
 
 @router.delete("/{book_id}", response_model=DeleteResponse)
-def delete_book(book_id: str) -> DeleteResponse:
-    """级联删除指定书籍：向量库 chunk、图谱、目录、封面、源文件、笔记。"""
+def delete_book(book_id: str, request: Request) -> DeleteResponse:
+    """级联删除指定书籍：向量库 chunk、图谱、目录、封面、源文件、笔记、聊天记录。"""
     catalog = get_book_catalog()
     book = catalog.get_by_id(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="书籍不存在")
+
+    # 清理聊天记录
+    agent = getattr(request.app.state, "agent", None)
+    if agent and hasattr(agent, "clear_chat_history"):
+        agent.clear_chat_history(book_id=book_id)
 
     source = book.get("source") or ""
     cover_path = book.get("cover_path") or ""

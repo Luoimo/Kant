@@ -8,12 +8,9 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-router = APIRouter(tags=["chat"])
+from prompts import get_prompts, normalize_locale
 
-_TOOL_STATUS: dict[str, str] = {
-    "search_book_content": "正在检索书籍内容…",
-    "search_past_notes": "正在回顾历史笔记…",
-}
+router = APIRouter(tags=["chat"])
 
 
 class ChatRequest(BaseModel):
@@ -24,6 +21,7 @@ class ChatRequest(BaseModel):
     active_tab: str | None = None
     selected_text: str | None = None
     current_chapter: str | None = None
+    locale: str | None = None   # "zh-CN" or "en-US"; falls back to zh-CN server-side
 
 
 class ChatResponse(BaseModel):
@@ -32,6 +30,20 @@ class ChatResponse(BaseModel):
     retrieved_docs_count: int
     intent: str | None
     followups: list[str] = []
+
+
+def _tool_status_label(tool_name: str, locale: str | None) -> str:
+    p = get_prompts(locale).router
+    return {
+        "search_book_content": p.tool_status_book,
+        "search_past_notes": p.tool_status_notes,
+    }.get(tool_name, p.tool_status_default)
+
+
+def _safety_denied_text(reason: str, locale: str | None) -> str:
+    if normalize_locale(locale) == "en-US":
+        return f"This request did not pass the safety check: {reason}"
+    return f"当前请求未通过安全检查：{reason}"
 
 
 def _resolve_book(book_id: str) -> tuple[str | None, str]:
@@ -57,8 +69,6 @@ def _fetch_memory(mem0, query: str) -> str:
 
 
 def _build_query(req: ChatRequest, book_title: str) -> str:
-    # 彻底弃用前端的系统字符串拼接，返回干净的原始 query。
-    # 动态参数将直接传给 Agent，由 Agent 在内部作为状态或 SystemMessage 处理。
     return req.query
 
 
@@ -74,10 +84,24 @@ def get_chat_history(
     return {"messages": history}
 
 
+@router.delete("/chat/history")
+def delete_chat_history(
+    book_id: str | None = None,
+    user_id: str = "default",
+    thread_id: str = "default",
+    request: Request = None
+) -> dict[str, str]:
+    agent = request.app.state.agent
+    agent.clear_chat_history(book_id=book_id or "", user_id=user_id, thread_id=thread_id)
+    return {"status": "ok"}
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatResponse:
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=422, detail="query 不能为空")
+
+    locale = normalize_locale(req.locale)
 
     agent = request.app.state.agent
     mem0 = request.app.state.mem0
@@ -90,7 +114,7 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
     safety = run_lakera_guard_check(req.query)
     if not safety.allowed:
         return ChatResponse(
-            answer=f"当前请求未通过安全检查：{safety.reason}",
+            answer=_safety_denied_text(safety.reason, locale),
             citations=[],
             retrieved_docs_count=0,
             intent=None,
@@ -111,10 +135,11 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
         thread_id=req.thread_id,
         selected_text=req.selected_text,
         current_chapter=req.current_chapter,
+        locale=locale,
     )
 
     if book_title:
-        bg.add_task(_run_note_hook, note_agent, req.query, result.answer, book_title, book_id)
+        bg.add_task(_run_note_hook, note_agent, req.query, result.answer, book_title, book_id, locale)
 
     if mem0 and result.answer:
         try:
@@ -124,7 +149,7 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
 
     followups = []
     if followup_agent and result.answer:
-        followups = followup_agent.generate(req.query, result.answer)
+        followups = followup_agent.generate(req.query, result.answer, locale=locale)
 
     return ChatResponse(
         answer=result.answer,
@@ -140,6 +165,9 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=422, detail="query 不能为空")
 
+    locale = normalize_locale(req.locale)
+    router_prompts = get_prompts(locale).router
+
     agent = request.app.state.agent
     mem0 = request.app.state.mem0
     note_agent = request.app.state.note_agent
@@ -150,8 +178,9 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
     from security.input_filter import run_lakera_guard_check
     safety = run_lakera_guard_check(req.query)
     if not safety.allowed:
+        denied_msg = _safety_denied_text(safety.reason, locale)
         async def _denied():
-            yield f"data: {json.dumps({'type': 'error', 'message': safety.reason})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': denied_msg}, ensure_ascii=False)}\n\n"
         return StreamingResponse(_denied(), media_type="text/event-stream")
 
     book_id = req.book_id or ""
@@ -163,19 +192,22 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
         answer_parts: list[str] = []
         docs_count = 0
         docs_text = ""
-        
-        # 1. 预处理路由阶段 (RouterAgent)
+
+        # 1. Routing
         optimized_query = query
         if router_agent:
-            yield f"data: {json.dumps({'type': 'status', 'text': '正在识别意图…'}, ensure_ascii=False)}\n\n"
-            route_info = await router_agent.aroute(req.query)
+            yield f"data: {json.dumps({'type': 'status', 'text': router_prompts.intent_status}, ensure_ascii=False)}\n\n"
+            route_info = await router_agent.aroute(req.query, locale=locale)
             if route_info.get("intent") == "book_qa":
-                optimized_query = _build_query(ChatRequest(**{**req.model_dump(), "query": route_info["optimized_query"]}), book_title)
-        
+                optimized_query = _build_query(
+                    ChatRequest(**{**req.model_dump(), "query": route_info["optimized_query"]}),
+                    book_title,
+                )
+
         # Signal immediately so the frontend can drop the typing indicator
         yield f"data: {json.dumps({'type': 'thinking'}, ensure_ascii=False)}\n\n"
-        
-        # 2. 主查询阶段 (DeepReadAgent)
+
+        # 2. Main answering (DeepReadAgent)
         try:
             async for event_type, data in agent.astream_events(
                 query=optimized_query,
@@ -186,16 +218,16 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                 thread_id=req.thread_id,
                 selected_text=req.selected_text,
                 current_chapter=req.current_chapter,
+                locale=locale,
             ):
                 if event_type == "token":
                     answer_parts.append(data)
                     yield f"data: {json.dumps({'type': 'token', 'text': data}, ensure_ascii=False)}\n\n"
                 elif event_type == "tool":
-                    label = _TOOL_STATUS.get(data, "正在处理…")
+                    label = _tool_status_label(data, locale)
                     yield f"data: {json.dumps({'type': 'status', 'text': label}, ensure_ascii=False)}\n\n"
                 elif event_type == "done":
                     docs_count = data["docs_count"]
-                    # 将检索到的证据拼起来供后续 Critic 使用
                     docs_text = "\n".join([c.get("snippet", "") for c in data.get("citations", [])])
                     yield f"data: {json.dumps({'type': 'done', 'citations': data['citations'], 'docs_count': docs_count}, ensure_ascii=False)}\n\n"
         except Exception as exc:
@@ -204,22 +236,21 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
 
         full_answer = "".join(answer_parts)
 
-        # 3. 后置评估阶段 (CriticAgent) - 直接向用户流式追加评估结果
+        # 3. Critic review — streamed to the user
         critic_full = ""
         if critic_agent and full_answer:
             try:
-                async for critic_chunk in critic_agent.aevaluate(req.query, docs_text, full_answer):
+                async for critic_chunk in critic_agent.aevaluate(
+                    req.query, docs_text, full_answer, locale=locale,
+                ):
                     critic_full += critic_chunk
                     yield f"data: {json.dumps({'type': 'token', 'text': critic_chunk}, ensure_ascii=False)}\n\n"
             except Exception as e:
                 print(f"[chat] critic failed: {e}")
 
         # Post-stream side effects — fire and forget
-        # We start the background tasks immediately without awaiting them here
-        # so that we can proceed to generate followups without blocking the stream.
         tasks: list = []
-        
-        # 将审查笔记补充到聊天记录中
+
         if critic_full:
             tasks.append(asyncio.create_task(
                 asyncio.to_thread(
@@ -227,27 +258,24 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                     content=critic_full,
                     book_id=book_id,
                     user_id=req.user_id,
-                    thread_id=req.thread_id
+                    thread_id=req.thread_id,
+                    locale=locale,
                 )
             ))
-            
+
         if book_title:
-            # Removed the docs_count > 0 condition so notes are saved even for casual chat or non-RAG answers
             tasks.append(asyncio.create_task(
                 asyncio.to_thread(
-                    _run_note_hook, note_agent, req.query, full_answer, book_title, book_id
+                    _run_note_hook, note_agent, req.query, full_answer, book_title, book_id, locale,
                 )
             ))
         if mem0 and full_answer:
             tasks.append(asyncio.create_task(
                 asyncio.to_thread(mem0.add_qa, req.query, full_answer)
             ))
-            
-        # Instead of awaiting tasks here, we let them run in the background
-        # and immediately start generating followups
 
         if followup_agent and full_answer:
-            followups = await followup_agent.agenerate(req.query, full_answer)
+            followups = await followup_agent.agenerate(req.query, full_answer, locale=locale)
             if followups:
                 yield f"data: {json.dumps({'type': 'followup', 'questions': followups}, ensure_ascii=False)}\n\n"
 
@@ -259,9 +287,10 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
 
 
 def _run_note_hook(
-    note_agent, query: str, answer: str, book_title: str, book_id: str
+    note_agent, query: str, answer: str, book_title: str, book_id: str,
+    locale: str | None = None,
 ) -> None:
     try:
-        note_agent.process_qa(query, answer, book_title, book_id=book_id)
+        note_agent.process_qa(query, answer, book_title, book_id=book_id, locale=locale)
     except Exception as exc:
         print(f"[chat] note hook failed: {exc}")

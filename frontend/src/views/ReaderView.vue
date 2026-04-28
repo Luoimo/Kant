@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { NProgress } from 'naive-ui'
 import EpubReader from '@/components/EpubReader.vue'
 import ReaderChat from '@/components/reader/ReaderChat.vue'
@@ -11,6 +12,7 @@ const route   = useRoute()
 const router  = useRouter()
 const booksStore  = useBooksStore()
 const readerStore = useReaderStore()
+const { t } = useI18n()
 
 const bookId = computed(() => route.params.bookId)
 const book   = computed(() => booksStore.books.find((b) => b.id === bookId.value))
@@ -46,7 +48,7 @@ onMounted(async () => {
   <div class="reader-view">
     <!-- ── Topbar ── -->
     <div class="topbar">
-      <button class="back-btn" @click="router.push({ name: 'library' })">← 书库</button>
+      <button class="back-btn" @click="router.push({ name: 'library' })">{{ t('reader.back') }}</button>
 
       <div class="book-meta" v-if="book">
         <div
@@ -90,7 +92,7 @@ onMounted(async () => {
           @cfi-change="onCfiChange"
           @text-selected="onTextSelected"
         />
-        <div v-else class="epub-placeholder">书籍文件不可用</div>
+        <div v-else class="epub-placeholder">{{ t('reader.fileUnavailable') }}</div>
       </div>
 
       <!-- Right: AI chat -->

@@ -1,13 +1,16 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { NModal, NUpload, NUploadDragger, NButton, NSpin, useMessage } from 'naive-ui'
 import { useBooksStore } from '@/stores/books'
+import { SUPPORTED_LOCALES, persistLocale } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const booksStore = useBooksStore()
 const message = useMessage()
+const { t, locale } = useI18n()
 
 const showUpload = ref(false)
 const uploading = ref(false)
@@ -15,14 +18,19 @@ const uploadPercent = ref(0)
 
 onMounted(() => booksStore.fetchBooks())
 
-const navItems = [
-  { key: 'library', label: '我的书库', icon: '📚' },
-]
+const navItems = computed(() => [
+  { key: 'library', label: t('sidebar.library'), icon: '📚' },
+])
 
 const activeNav = computed(() => route.name)
 
 function go(name) {
   router.push({ name })
+}
+
+function switchLocale(value) {
+  locale.value = value
+  persistLocale(value)
 }
 
 async function handleUpload({ file }) {
@@ -32,10 +40,10 @@ async function handleUpload({ file }) {
     await booksStore.uploadBook(file.file, (e) => {
       if (e.total) uploadPercent.value = Math.round((e.loaded / e.total) * 100)
     })
-    message.success('书籍导入成功！')
+    message.success(t('upload.success'))
     showUpload.value = false
   } catch (e) {
-    message.error(`导入失败：${e.response?.data?.detail ?? e.message}`)
+    message.error(t('upload.failed', { msg: e.response?.data?.detail ?? e.message }))
   } finally {
     uploading.value = false
     uploadPercent.value = 0
@@ -50,11 +58,11 @@ async function handleUpload({ file }) {
     <aside class="sidebar">
       <div class="sidebar-logo">
         <span class="logo-name">Kant</span>
-        <span class="logo-sub">读书 AI 助手</span>
+        <span class="logo-sub">{{ t('sidebar.logoSub') }}</span>
       </div>
 
       <nav class="sidebar-nav">
-        <div class="nav-section-label">主菜单</div>
+        <div class="nav-section-label">{{ t('sidebar.mainMenu') }}</div>
         <button
           v-for="item in navItems"
           :key="item.key"
@@ -70,19 +78,29 @@ async function handleUpload({ file }) {
       <div class="sidebar-stats">
         <div class="stat-item">
           <div class="stat-num">{{ booksStore.books.length }}</div>
-          <div class="stat-label">书库</div>
+          <div class="stat-label">{{ t('sidebar.statsLibrary') }}</div>
         </div>
         <div class="stat-item">
           <div class="stat-num">{{ booksStore.readingBooks.length }}</div>
-          <div class="stat-label">在读</div>
+          <div class="stat-label">{{ t('sidebar.statsReading') }}</div>
         </div>
         <div class="stat-item">
           <div class="stat-num">{{ booksStore.doneBooks.length }}</div>
-          <div class="stat-label">已读</div>
+          <div class="stat-label">{{ t('sidebar.statsDone') }}</div>
         </div>
       </div>
 
-      <button class="upload-btn" @click="showUpload = true">＋ 导入书籍</button>
+      <div class="lang-switch" role="group" :aria-label="t('common.language')">
+        <button
+          v-for="opt in SUPPORTED_LOCALES"
+          :key="opt.value"
+          class="lang-btn"
+          :class="{ active: locale === opt.value }"
+          @click="switchLocale(opt.value)"
+        >{{ opt.label }}</button>
+      </div>
+
+      <button class="upload-btn" @click="showUpload = true">{{ t('sidebar.uploadBook') }}</button>
     </aside>
 
     <!-- ── Main ── -->
@@ -91,7 +109,7 @@ async function handleUpload({ file }) {
     </main>
 
     <!-- ── Upload Modal ── -->
-    <NModal v-model:show="showUpload" preset="card" title="导入 EPUB" style="width: 480px;">
+    <NModal v-model:show="showUpload" preset="card" :title="t('upload.title')" style="width: 480px;">
       <NSpin :show="uploading">
         <NUpload
           accept=".epub"
@@ -102,8 +120,8 @@ async function handleUpload({ file }) {
           <NUploadDragger>
             <div class="upload-dragger-body">
               <div class="upload-icon">📖</div>
-              <p class="upload-hint">点击或拖拽 EPUB 文件到此区域</p>
-              <p class="upload-sub">仅支持 .epub 格式</p>
+              <p class="upload-hint">{{ t('upload.hint') }}</p>
+              <p class="upload-sub">{{ t('upload.sub') }}</p>
               <div v-if="uploading" class="upload-progress">
                 <div class="progress-bar" :style="{ width: uploadPercent + '%' }"></div>
               </div>
@@ -236,6 +254,35 @@ async function handleUpload({ file }) {
 }
 
 .upload-btn:hover { opacity: 0.88; }
+
+/* ── Language switch ── */
+.lang-switch {
+  margin: 10px 12px 0;
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+}
+.lang-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: rgba(240,235,224,0.55);
+  font-size: 11px;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 5px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.lang-btn:hover { color: #f0ebe0; }
+.lang-btn.active {
+  background: var(--accent);
+  color: white;
+}
 
 /* ── Main ── */
 .main-content {

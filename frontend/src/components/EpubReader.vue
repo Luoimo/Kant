@@ -1,5 +1,8 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   url:        { type: String,  required: true },
@@ -45,7 +48,7 @@ async function init() {
     const mod = await import('epubjs')
     ePub = mod.default ?? mod.ePub ?? mod
   } catch (e) {
-    errorMsg.value = `无法加载 epubjs：${e.message}`
+    errorMsg.value = t('reader.loadEpubJsFailed', { msg: e.message })
     loading.value = false
     return
   }
@@ -110,14 +113,14 @@ async function init() {
     // Timeout fallback
     timeoutId = setTimeout(() => {
       if (loading.value) {
-        errorMsg.value = '加载超时，请确认书籍文件可访问'
+        errorMsg.value = t('reader.loadTimeout')
         loading.value = false
       }
     }, 10000)
 
     // Display from saved position or beginning
     await rendition.display(props.initialCfi ?? undefined).catch((e) => {
-      errorMsg.value = `渲染失败：${e.message}`
+      errorMsg.value = t('reader.renderFailed', { msg: e.message })
       loading.value = false
     })
 
@@ -130,7 +133,7 @@ async function init() {
 
   } catch (e) {
     console.error('[EpubReader]', e)
-    errorMsg.value = `初始化失败：${e.message}`
+    errorMsg.value = t('reader.initFailed', { msg: e.message })
     loading.value = false
     emit('error', e)
   }
@@ -263,9 +266,9 @@ defineExpose({ prev, next, goToHref, currentChapter, toc })
   <div class="epub-reader">
     <!-- Header -->
     <div class="reader-bar">
-      <button class="toc-btn" @click="showToc = !showToc" title="目录">☰</button>
+      <button class="toc-btn" @click="showToc = !showToc" :title="t('reader.toc')">☰</button>
       <span class="chapter-label" :title="currentChapter">
-        {{ loading ? '加载中…' : (currentChapter || '　') }}
+        {{ loading ? t('common.loading') : (currentChapter || '　') }}
       </span>
     </div>
 
@@ -273,7 +276,7 @@ defineExpose({ prev, next, goToHref, currentChapter, toc })
     <Transition name="toc-slide">
       <div v-if="showToc" class="toc-panel">
         <div class="toc-header">
-          <span>目录</span>
+          <span>{{ t('reader.toc') }}</span>
           <button class="toc-close" @click="showToc = false">✕</button>
         </div>
         <div class="toc-list">
@@ -284,7 +287,7 @@ defineExpose({ prev, next, goToHref, currentChapter, toc })
             :style="{ paddingLeft: `${12 + item.depth * 14}px` }"
             @click="goToHref(item.href)"
           >{{ item.label }}</button>
-          <div v-if="toc.length === 0" class="toc-empty">暂无目录</div>
+          <div v-if="toc.length === 0" class="toc-empty">{{ t('reader.tocEmpty') }}</div>
         </div>
       </div>
     </Transition>
@@ -293,12 +296,12 @@ defineExpose({ prev, next, goToHref, currentChapter, toc })
     <div class="render-wrap">
       <div v-if="loading && !errorMsg" class="epub-loading">
         <div class="spinner"></div>
-        <p class="loading-tip">正在加载书籍内容…</p>
+        <p class="loading-tip">{{ t('reader.loadBook') }}</p>
       </div>
       <div v-if="errorMsg" class="epub-error">
         <p>⚠️</p>
         <p class="error-msg">{{ errorMsg }}</p>
-        <button class="retry-btn" @click="init">重新加载</button>
+        <button class="retry-btn" @click="init">{{ t('common.retry') }}</button>
       </div>
       <div
         ref="containerRef"
@@ -309,9 +312,9 @@ defineExpose({ prev, next, goToHref, currentChapter, toc })
 
     <!-- Nav controls -->
     <div class="nav-controls">
-      <button class="nav-btn" :disabled="atStart || loading" @click="prev">‹ 上页</button>
-      <span class="nav-hint">← → 键翻页</span>
-      <button class="nav-btn" :disabled="atEnd   || loading" @click="next">下页 ›</button>
+      <button class="nav-btn" :disabled="atStart || loading" @click="prev">{{ t('reader.prevPage') }}</button>
+      <span class="nav-hint">{{ t('reader.keyHint') }}</span>
+      <button class="nav-btn" :disabled="atEnd   || loading" @click="next">{{ t('reader.nextPage') }}</button>
     </div>
   </div>
 </template>

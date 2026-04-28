@@ -1,5 +1,15 @@
 <script setup>
-import { NConfigProvider, NDialogProvider, NMessageProvider, NNotificationProvider } from 'naive-ui'
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import {
+  NConfigProvider, NDialogProvider, NMessageProvider, NNotificationProvider,
+  zhCN, dateZhCN, enUS, dateEnUS,
+} from 'naive-ui'
+
+const { locale } = useI18n()
+
+const naiveLocale     = computed(() => (locale.value === 'zh-CN' ? zhCN     : enUS))
+const naiveDateLocale = computed(() => (locale.value === 'zh-CN' ? dateZhCN : dateEnUS))
 
 const themeOverrides = {
   common: {
@@ -33,7 +43,7 @@ const themeOverrides = {
 </script>
 
 <template>
-  <NConfigProvider :theme-overrides="themeOverrides">
+  <NConfigProvider :theme-overrides="themeOverrides" :locale="naiveLocale" :date-locale="naiveDateLocale">
     <NMessageProvider>
       <NNotificationProvider>
         <NDialogProvider>

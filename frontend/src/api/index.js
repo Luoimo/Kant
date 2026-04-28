@@ -22,6 +22,12 @@ export const booksApi = {
 export const chatApi = {
   send: (payload) => api.post('/chat', payload, { timeout: 60000 }),
   history: (bookId) => api.get('/chat/history', { params: bookId ? { book_id: bookId } : {} }),
+  clearHistory: (bookId, threadId) => {
+    const params = {}
+    if (bookId) params.book_id = bookId
+    if (threadId) params.thread_id = threadId
+    return api.delete('/chat/history', { params })
+  },
 }
 
 export const notesApi = {

@@ -18,28 +18,26 @@ class LLMReranker:
     增加了最低分数阈值（防幻觉），如果文档分数过低将被直接过滤。
     """
 
-    def __init__(self, llm=None, min_score: float = 3.0) -> None:
+    def __init__(self, llm=None, min_score: float = 3.0, *, locale: str | None = None) -> None:
         from llm.openai_client import get_llm
         self._llm = llm or get_llm(temperature=0.0)
         self.min_score = min_score
+        self._locale = locale
 
-    def rerank(self, query: str, docs: list[Document], top_k: int) -> list[Document]:
+    def rerank(self, query: str, docs: list[Document], top_k: int, *, locale: str | None = None) -> list[Document]:
         if not docs:
             return []
         if len(docs) <= top_k:
             return docs
 
+        from prompts import get_prompts
+        eff_locale = locale or self._locale
+        template = get_prompts(eff_locale).retriever.llm_reranker_prompt_template
+
         numbered = "\n\n".join(
             f"[{i + 1}] {doc.page_content[:500]}" for i, doc in enumerate(docs)
         )
-        prompt = (
-            f"你是一位哲学文献相关性评估专家。\n"
-            f"问题：{query}\n\n"
-            f"请为以下每个候选段落与该问题的相关性打分（0-10整数，0表示完全无关，10表示能完美回答问题），"
-            f"只输出如下格式，每行一个：\n"
-            f"1: 分数\n2: 分数\n...\n\n"
-            f"候选段落：\n{numbered}"
-        )
+        prompt = template.format(query=query, numbered=numbered)
         try:
             msg = self._llm.invoke(
                 [{"role": "user", "content": prompt}],

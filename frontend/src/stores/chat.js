@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { fetchSSEStream } from '@/composables/useSSEStream'
+import { chatApi } from '@/api'
 
 export const useChatStore = defineStore('chat', () => {
   const messages = ref([])
@@ -56,8 +57,13 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function clearMessages() {
+  async function clearMessages() {
     messages.value = []
+    try {
+      await chatApi.clearHistory(selectedBookId.value || null, threadId.value || 'default')
+    } catch (e) {
+      console.error('Failed to clear chat history on server:', e)
+    }
   }
 
   return { messages, loading, selectedBookId, threadId, sendMessageStream, clearMessages }

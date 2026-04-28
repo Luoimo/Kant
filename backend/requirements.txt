@@ -52,3 +52,6 @@ neo4j>=5.28.0
 hanlp>=2.1.0
 # 可选：HanLP 云端 RESTful 客户端（配合 API Key，不下载本地模型）
 hanlp-restful>=0.0.24
+
+# Notion 官方 API 客户端（note_backend=notion 时启用）
+notion-client>=2.2.1

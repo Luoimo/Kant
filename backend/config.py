@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Obsidian
     obsidian_vault: str = ""
 
+    # Note backend: "obsidian" (local CLI) or "notion" (cloud API)
+    note_backend: str = "notion"
+
+    # Notion (仅当 note_backend=notion 时使用)
+    notion_api_key: str = ""
+    notion_parent_page_id: str = ""
+
     # Mem0 记忆管理
     mem0_user_id: str = "kant-user"
     # Note and plan storage
