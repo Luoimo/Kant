@@ -32,6 +32,7 @@ from rag.chroma.chroma_store import (
     ChromaStore,
     IngestConfig,
     IngestResult,
+    _normalize_where,
 )
 from rag.chunker.text_chunker import ChunkMeta, TextChunk
 from tests.rag.conftest import make_chunk, SAMPLE_TITLE, SAMPLE_AUTHOR
@@ -309,7 +310,14 @@ class TestDeleteSource:
     def test_where_filter_uses_source(self, store, mock_collection):
         mock_collection.get.return_value = {"ids": []}
         store.delete_source("specific_source.epub")
-        mock_collection.get.assert_called_with(where={"source": "specific_source.epub"})
+        mock_collection.get.assert_called_with(
+            where={
+                "$and": [
+                    {"source": "specific_source.epub"},
+                    {"owner_user_id": "default"},
+                ]
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +545,17 @@ class TestResolveDb:
         monkeypatch.setattr("rag.chroma.chroma_store.Chroma", fake_chroma)
         resolved = store._resolve_db("other_col")
         assert resolved is new_db
+
+
+class TestWhereNormalization:
+
+    def test_normalize_where_keeps_single_field(self):
+        assert _normalize_where({"source": "a.epub"}) == {"source": "a.epub"}
+
+    def test_normalize_where_wraps_multi_fields_with_and(self):
+        assert _normalize_where({"book_id": "b1", "owner_user_id": "u1"}) == {
+            "$and": [{"book_id": "b1"}, {"owner_user_id": "u1"}]
+        }
 
 
 # ---------------------------------------------------------------------------

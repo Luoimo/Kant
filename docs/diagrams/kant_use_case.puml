@@ -1,0 +1,75 @@
+@startuml
+left to right direction
+
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Arial
+skinparam ArrowColor #64748B
+skinparam ArrowThickness 1.4
+skinparam rectangle {
+  BorderColor #1F4E79
+  BackgroundColor #FFFFFF
+  RoundCorner 18
+}
+skinparam package {
+  BorderColor #B9CBE0
+  BackgroundColor #EEF4FB
+  FontColor #1F4E79
+}
+skinparam usecase {
+  BorderColor #2E74B5
+  BackgroundColor #FFFFFF
+  FontColor #172033
+}
+
+actor "Reader /\nMember" as Reader
+actor "Administrator" as Admin
+
+rectangle "Kant Deep Reading System" {
+  package "Account" {
+    usecase "Register / Login" as Login
+  }
+
+  package "Library & Reading" {
+    usecase "Browse Library" as Browse
+    usecase "Upload EPUB" as Upload
+    usecase "Read EPUB" as Read
+    usecase "Track Reading Progress" as Progress
+  }
+
+  package "Reading Assistance" {
+    usecase "Ask Question\nAbout Book" as Ask
+    usecase "Review Answer\nwith Citations" as Review
+    usecase "Generate Reading Notes" as Notes
+    usecase "Manage Conversations" as Conversations
+  }
+
+  package "Governance & Admin" {
+    usecase "Manage Users" as Users
+    usecase "Inspect User Books" as InspectBooks
+    usecase "Inspect Conversations" as InspectConversations
+    usecase "View Audit Logs" as Audit
+  }
+}
+
+Reader --> Login
+Reader --> Browse
+Reader --> Upload
+Reader --> Read
+Reader --> Progress
+Reader --> Ask
+Reader --> Review
+Reader --> Notes
+Reader --> Conversations
+
+Admin --> Login
+Admin --> Users
+Admin --> InspectBooks
+Admin --> InspectConversations
+Admin --> Audit
+
+Ask ..> Review : <<include>>
+
+@enduml

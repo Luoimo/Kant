@@ -1,9 +1,9 @@
-"""Notion 后端工具：用 Notion 官方 API 替代 Obsidian CLI。
+"""Notion 后端工具。
 
-暴露三个与 obsidian_tools.py 完全同名的 @tool，保证 NoteAgent 无感切换：
+暴露三个笔记工具：
 - read_past_notes(book_title): 读取指定书的历史笔记
 - search_vault_for_concept(query): 在整个 workspace 中搜索概念
-- append_note_to_obsidian(book_title, markdown_content): 追加 Markdown 到对应书页
+- append_note_to_workspace(book_title, markdown_content): 追加 Markdown 到对应书页
 
 依赖：
     pip install notion-client
@@ -253,7 +253,7 @@ def _rich(text: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# LangChain Tools（保持与 obsidian_tools.py 同名签名）
+# LangChain Tools
 # ---------------------------------------------------------------------------
 
 
@@ -297,11 +297,8 @@ def search_vault_for_concept(query: str) -> str:
 
 
 @tool
-def append_note_to_obsidian(book_title: str, markdown_content: str) -> str:
-    """将整理好的 Markdown 笔记追加写入对应书籍的 Notion 页面；不存在则新建。
-
-    （保持与 Obsidian 版同名，避免 NoteAgent prompt/调用逻辑改动。）
-    """
+def append_note_to_workspace(book_title: str, markdown_content: str) -> str:
+    """将整理好的 Markdown 笔记追加写入对应书籍的 Notion 页面；不存在则新建。"""
     if not _get_client():
         return "Error: Notion 未配置 (缺少 NOTION_API_KEY)"
 
@@ -321,4 +318,4 @@ def append_note_to_obsidian(book_title: str, markdown_content: str) -> str:
     return f"已写入 Notion 页面《{book_title}》"
 
 
-TOOLS = [read_past_notes, search_vault_for_concept, append_note_to_obsidian]
+TOOLS = [read_past_notes, search_vault_for_concept, append_note_to_workspace]

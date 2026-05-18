@@ -1,8 +1,10 @@
 // fetchSSEStream — shared SSE stream reader used by chat.js and ReaderChat.vue
 // url: string, body: object
 // callbacks: { onThinking, onStatus, onToken, onDone, onFollowup, onError }
+import { fetchWithAuthRefresh } from '@/auth/tokenManager'
+
 export async function fetchSSEStream(url, body, { onThinking, onStatus, onToken, onDone, onFollowup, onError } = {}) {
-  const response = await fetch(url, {
+  const response = await fetchWithAuthRefresh(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

@@ -28,14 +28,10 @@ from utils.text import safe_id
 
 
 def _load_note_tools():
-    """按 settings.note_backend 选择笔记后端工具集。"""
-    backend = (get_settings().note_backend or "obsidian").lower()
-    if backend == "notion":
-        from agents.notion_tools import TOOLS as _TOOLS
-        logging.getLogger(__name__).info("NoteAgent backend=notion")
-        return _TOOLS
-    from agents.obsidian_tools import TOOLS as _TOOLS
-    logging.getLogger(__name__).info("NoteAgent backend=obsidian")
+    """Load note tools (Notion backend only)."""
+    _ = get_settings()  # keep settings initialization side effects
+    from agents.notion_tools import TOOLS as _TOOLS
+    logging.getLogger(__name__).info("NoteAgent backend=notion")
     return _TOOLS
 
 logger = logging.getLogger(__name__)
@@ -62,10 +58,10 @@ class NoteEntry:
 
 class NoteAgent:
     """
-    升级版 NoteAgent：作为 ReAct Agent 运行，自主使用 Obsidian CLI 工具。
+    升级版 NoteAgent：作为 ReAct Agent 运行，自主使用 Notion 工具。
     1. LLM 提炼基本要素 (JSON)
     2. 触发 Tool-calling Agent 进行知识库搜索与编织
-    3. Agent 自主调用 Obsidian CLI 写入 Markdown
+    3. Agent 自主调用 Notion API 持久化笔记
     4. Upsert 到 ChromaDB notes 集合供前端时间轴展示
     """
 
@@ -80,7 +76,7 @@ class NoteAgent:
         self._notes_dir.mkdir(parents=True, exist_ok=True)
         self._llm = llm or get_llm(temperature=0.1)
         
-        # 初始化 ReAct Agent（按配置选择 Obsidian 或 Notion 后端）
+        # 初始化 ReAct Agent（固定使用 Notion 后端）
         self._tools = _load_note_tools()
         self._agent_executor = create_react_agent(
             self._llm,
@@ -89,6 +85,7 @@ class NoteAgent:
 
     def process_qa(
         self, question: str, answer: str, book_title: str, book_id: str = "",
+        user_id: str = "default",
         *, locale: str | None = None,
     ) -> NoteEntry | None:
         """deepread_book 后自动调用。提炼问答、触发 Agent 并入库。"""
@@ -96,19 +93,19 @@ class NoteAgent:
             return None
 
         prompts = get_prompts(locale).note
-        obs_prompts = get_prompts(locale).obsidian
+        note_tool_prompts = get_prompts(locale).note_tools
 
         # Update tool descriptions per-locale before handing tools to the ReAct agent.
         try:
             for t in self._tools:
                 if t.name == "read_past_notes":
-                    t.description = obs_prompts.read_past_desc
+                    t.description = note_tool_prompts.read_past_desc
                 elif t.name == "search_vault_for_concept":
-                    t.description = obs_prompts.search_vault_desc
-                elif t.name == "append_note_to_obsidian":
-                    t.description = obs_prompts.append_note_desc
+                    t.description = note_tool_prompts.search_vault_desc
+                elif t.name == "append_note_to_workspace":
+                    t.description = note_tool_prompts.append_note_desc
         except Exception as e:
-            logger.debug("update obsidian tool desc failed: %s", e)
+            logger.debug("update note tool desc failed: %s", e)
 
         # 1. 提取结构化数据 (用于 VectorDB 和时间轴)
         try:
@@ -123,9 +120,9 @@ class NoteAgent:
             **extracted,
         )
 
-        # 2. 让 Agent 自主执行 Obsidian 搜索和写入
+        # 2. 让 Agent 自主执行笔记搜索和写入
         try:
-            logger.info("Starting Obsidian Note Agent for %s", book_title)
+            logger.info("Starting Note Agent for %s", book_title)
 
             task_msg = prompts.agent_system_template.format(
                 book_title=book_title,
@@ -139,12 +136,12 @@ class NoteAgent:
                 "messages": [HumanMessage(content=task_msg + prompts.agent_task_suffix)]
             })
         except Exception as e:
-            logger.error("Obsidian Agent execution failed: %s", e)
+            logger.error("Note Agent execution failed: %s", e)
 
         # 3. 记录到目录，确保前端可以定位
         if book_id:
             note_path = self._resolve_note_path(book_id, book_title)
-            get_note_catalog().upsert(book_id=book_id, file_path=str(note_path))
+            get_note_catalog().upsert(owner_user_id=user_id, book_id=book_id, file_path=str(note_path))
 
         logger.info("processed Q&A for 《%s》, concepts=%s", book_title, entry.concepts)
         return entry
@@ -155,10 +152,11 @@ class NoteAgent:
 
     def _resolve_note_path(self, book_id: str, book_title: str) -> Path:
         if book_id:
-            record = get_note_catalog().get_by_book_id(book_id)
+            # 保守兼容：路径解析阶段不强制 owner；如需严格 owner，请传入 user_id 并改签名
+            record = None
             if record:
                 return Path(record["file_path"])
-        # 改为使用书名，契合 Obsidian 的命名习惯
+        # 改为使用书名，便于识别
         safe = re.sub(r'[<>:"/\\|?*《》【】\r\n]', "_", book_title).strip("_. ") or "unknown"
         return self._notes_dir / f"{safe}.md"
 

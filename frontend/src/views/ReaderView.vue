@@ -19,7 +19,12 @@ const book   = computed(() => booksStore.books.find((b) => b.id === bookId.value
 
 const epubUrl = computed(() => {
   if (!book.value?.source) return null
-  const filename = book.value.source.split(/[/\\]/).pop()
+  // 后端 /books 接口已把 source 转换为可直接访问的 URL：
+  //   - 启用 OSS 时：签名 URL（http(s):// 开头）
+  //   - 未启用 OSS（本地开发）：原始本地路径，需走 /ebooks 静态路由
+  const value = book.value.source
+  if (/^https?:\/\//i.test(value)) return value
+  const filename = value.split(/[/\\]/).pop()
   return `/ebooks/${encodeURIComponent(filename)}`
 })
 

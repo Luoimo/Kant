@@ -28,7 +28,7 @@ export const useBooksStore = defineStore('books', () => {
   const error = ref(null)
 
   const readingBooks = computed(() => books.value.filter((b) => b.status === 'reading'))
-  const doneBooks = computed(() => books.value.filter((b) => b.status === 'done'))
+  const doneBooks = computed(() => books.value.filter((b) => b.status === 'done' || b.status === 'completed'))
   const currentBook = computed(() => readingBooks.value[0] ?? null)
 
   async function fetchBooks() {
@@ -58,7 +58,13 @@ export const useBooksStore = defineStore('books', () => {
 
   function getCoverUrl(book) {
     if (!book?.cover_path) return null
-    const filename = book.cover_path.split(/[/\\]/).pop()
+    // 后端已统一在 /books 接口里把 cover_path 转成可直接访问的 URL：
+    //   - 启用 OSS 时：oss-cn-beijing.aliyuncs.com 上的临时签名 URL
+    //   - 未启用 OSS（本地开发）：原始本地路径，需走 /covers 静态路由
+    // 因此凡是 http(s):// 开头的，直接使用；否则按文件名兜底拼 /covers/。
+    const value = book.cover_path
+    if (/^https?:\/\//i.test(value)) return value
+    const filename = value.split(/[/\\]/).pop()
     return `/covers/${filename}`
   }
 

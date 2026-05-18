@@ -65,7 +65,7 @@ class NoteExtractPrompts:
 
 
 @dataclass(frozen=True)
-class ObsidianToolPrompts:
+class NoteToolPrompts:
     read_past_desc: str
     search_vault_desc: str
     append_note_desc: str
@@ -85,7 +85,7 @@ class PromptBundle:
     critic: CriticPrompts
     followup: FollowupPrompts
     note: NoteExtractPrompts
-    obsidian: ObsidianToolPrompts
+    note_tools: NoteToolPrompts
     retriever: RetrieverPrompts
 
 
@@ -96,6 +96,6 @@ __all__ = [
     "CriticPrompts",
     "FollowupPrompts",
     "NoteExtractPrompts",
-    "ObsidianToolPrompts",
+    "NoteToolPrompts",
     "RetrieverPrompts",
 ]

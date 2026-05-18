@@ -13,7 +13,7 @@
 ### 1. Agentic AI 系统设计 (多智能体协作)
 系统采用了清晰的 **Router + 专家/评估/后处理 Agent** 架构编排，确保阅读问答场景的高效与严谨。
 - **明确分工**：拥有五个专门的执行 Agent：前端路由分类（RouterAgent）、精读问答检索（DeepReadAgent）、后置客观性与幻觉评估（CriticAgent）、笔记提炼整理（NoteAgent）、以及引导思考（FollowupAgent）。
-- **通信与协调**：采用经典的 Agent 协作模式（Supervisor/Critic 机制与 Hook 机制）。例如，用户提问首先由 RouterAgent 进行意图识别，然后由 DeepReadAgent 基于 RAG 进行回答，回答结束后同步触发 CriticAgent 进行事实核查，同时触发 NoteAgent 调用 Obsidian CLI 提炼并写入笔记、FollowupAgent 生成追问。
+- **通信与协调**：采用经典的 Agent 协作模式（Supervisor/Critic 机制与 Hook 机制）。例如，用户提问首先由 RouterAgent 进行意图识别，然后由 DeepReadAgent 基于 RAG 进行回答，回答结束后同步触发 CriticAgent 进行事实核查，同时触发 NoteAgent 调用 Notion API 提炼并写入笔记、FollowupAgent 生成追问。
 - **状态管理**：结合 **Mem0** 实现跨会话的用户长期记忆（阅读偏好、知识背景等），并使用 **LangGraph Checkpointer (SQLite)** 维护短时聊天上下文。
 
 ### 2. AI Security (大模型安全防御)
@@ -24,14 +24,14 @@
 
 ### 3. Explainable & Responsible AI (可解释性与负责任的 AI)
 - **Explainability (可解释性)**：所有来自精读的回答都会附带精确的 **Citations (引用来源)**，并在前端 UI 清晰标明原文出处（书名与章节片段），确保 AI 的回答过程透明、可追溯。
-- **知识网状编织 (Zettelkasten)**：NoteAgent 会自主调用大模型提取核心概念，并在 Obsidian 本地知识库中进行双向链接 (`[[概念]]`) 搜索和写入，让知识脉络对用户完全透明且可控。
+- **知识网状编织 (Zettelkasten)**：NoteAgent 会自主调用大模型提取核心概念，并在 Notion 笔记库中进行跨书关联搜索和写入，让知识脉络对用户透明且可追溯。
 - **Governance & Off-topic Control (治理与控制)**：通过输入过滤器实现“软警告”机制，当用户讨论与“阅读/精读”完全无关的话题时，系统会温和提示，确保 AI 助手保持其核心用途。
 
 ### 4. MLSecOps / LLMSecOps (系统集成与自动化部署)
 具备完整的现代工程化开发流水线：
 - **CI/CD 流水线**：通过 GitHub Actions 配置了自动化的构建与测试流程。
 - **自动化测试**：拥有近 200 个单元与集成测试（Pytest），覆盖核心逻辑。
-- **系统架构设计**：Vue 3 / Vite 前端配合 FastAPI 高性能异步后端。核心阅读体验深度集成在单一的 `ReaderView` 中，去除了冗余页面。数据流采用高度模块化的设计（SQLite 管理聊天记录与元数据，ChromaDB 管理向量，Neo4j 管理知识图谱，Obsidian CLI 管理本地 Markdown 笔记）。
+- **系统架构设计**：Vue 3 / Vite 前端配合 FastAPI 高性能异步后端。核心阅读体验深度集成在单一的 `ReaderView` 中，去除了冗余页面。数据流采用高度模块化的设计（SQLite 管理聊天记录与元数据，ChromaDB 管理向量，Neo4j 管理知识图谱，Notion API 管理笔记）。
 
 ---
 
@@ -48,7 +48,7 @@ EPUB → EpubExtractor → TextCleaner → TextChunker → OpenAI Embeddings →
                                └─ 核心问答流：
                                    ├─ DeepReadAgent（主流程：基于 Graph + Vector RAG 检索回答，附带证据引用）
                                    ├─ CriticAgent（评估流：同步进行事实核查与客观性审查）
-                                   ├─ NoteAgent（后处理：自主调用 Obsidian CLI 搜索双向链接并写入 Markdown）
+                                   ├─ NoteAgent（后处理：自主调用 Notion API 搜索跨书关联并写入笔记）
                                    └─ FollowupAgent（后处理：根据对话生成深入追问问题）
 ```
 
@@ -62,9 +62,9 @@ backend/
     router_agent.py        前端路由 Agent，负责意图分类
     deepread_agent.py      精读问答 Agent，基于检索内容生成带引用的回答 (LangGraph)
     critic_agent.py        评论员 Agent，事实核查与客观性评估（防止幻觉）
-    note_agent.py          笔记整理 Agent，通过 Obsidian CLI 自动编织卡片盒笔记
+    note_agent.py          笔记整理 Agent，通过 Notion API 自动编织卡片盒笔记
     followup_agent.py      追问 Agent，在一轮问答结束后生成相关引导问题
-    obsidian_tools.py      Obsidian CLI 工具封装
+    notion_tools.py        Notion API 工具封装
   api/
     chat.py                POST /chat/stream, GET /chat/history
     books.py               书籍上传与管理端点
@@ -124,8 +124,10 @@ BOOKS_DATA_DIR=data/books
 COVERS_DIR=data/covers
 BOOK_CATALOG_DB=data/books.db
 
-# Obsidian 知识库路径配置 (必填)
-OBSIDIAN_VAULT=/path/to/your/obsidian/vault
+# Notion 笔记后端配置 (必填)
+NOTE_BACKEND=notion
+NOTION_API_KEY=ntn_xxx
+NOTION_PARENT_PAGE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # Neo4j 图数据库配置 (选填，不填则退回纯向量 RAG)
 NEO4J_URI=bolt://localhost:7687
@@ -235,10 +237,26 @@ curl -X POST http://localhost:8000/books/upload \
 
 ### 5. 对话
 
+> 新版接口需要先登录获取 Bearer Token，并使用 `book_id + conversation_id` 发起会话。
+
 ```bash
-curl -X POST http://localhost:8000/chat \
+curl -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"query": "康德的先验统觉是什么？", "thread_id": "session-1"}'
+  -d '{"email":"user@example.com","password":"your-password"}'
+```
+
+```bash
+curl -X POST http://localhost:8000/api/user/books/<book_id>/conversations \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"第一轮讨论"}'
+```
+
+```bash
+curl -X POST http://localhost:8000/api/user/chat \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"康德的先验统觉是什么？","book_id":"<book_id>","conversation_id":"<conversation_id>"}'
 ```
 
 响应：
@@ -256,15 +274,15 @@ curl -X POST http://localhost:8000/chat \
 
 ## API 参考
 
-### POST /chat
+### POST /api/user/chat
 
 **请求字段：**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `query` | string | 用户输入 |
-| `book_id` | string? | 指定书的 UUID（限定检索范围） |
-| `thread_id` | string | 会话 ID，同一 ID 共享多轮上下文（默认 `"default"`） |
+| `book_id` | string | 指定书的 UUID（限定检索范围） |
+| `conversation_id` | string | 会话 ID（后端创建，每本书可多会话） |
 | `active_tab` | string? | 前端当前标签页，直接路由到对应 Agent，跳过意图分类 |
 | `selected_text` | string? | 用户在阅读器中划选的原文，注入为问题上下文 |
 | `current_chapter` | string? | 当前阅读章节，注入为问题上下文 |
@@ -280,19 +298,31 @@ curl -X POST http://localhost:8000/chat \
 
 ### GET /books
 
-- 返回所有书籍列表，来自 SQLite `BookCatalog`
+- 需要 Bearer Token
+- 返回当前登录用户自己的书籍列表
 - 每条包含 `book_id`、`title`、`author`、`status`、`progress`、`cover_path` 等完整字段
 
 ### POST /books/upload
 
+- 需要 Bearer Token
 - 上传 `.epub` 文件（multipart/form-data）
-- 触发入库流水线：解析 → 切块 → 向量化 → 写入 ChromaDB → 写入 SQLite（可选写入 Neo4j）→ 提取封面
+- 触发入库流水线：解析 → 切块 → 向量化 → 写入 ChromaDB（按 owner_user_id 隔离）→ 写入 PostgreSQL（可选写入 Neo4j）→ 提取封面
 - Neo4j 启用时会自动构建图谱骨架：
   - `(:Book)-[:HAS_CHAPTER]->(:Chapter)`
   - `(:Chapter)-[:COVERS]->(:Concept)`
   - `(:Concept)-[:RELATED_TO]->(:Concept)`（同章节概念共现）
 - 入库成功后自动刷新 BM25 索引缓存
 - 响应含 `book_id`（确定性 uuid5，后续所有操作均以此为主键）
+
+### POST /api/user/books/{book_id}/conversations
+
+- 需要 Bearer Token
+- 在某本书下创建新会话，返回 `conversation_id`
+
+### GET /api/user/books/{book_id}/conversations
+
+- 需要 Bearer Token
+- 列出当前用户在该书下的所有会话
 
 ### POST /reader/{book_id}/init
 
@@ -354,13 +384,12 @@ curl -X POST http://localhost:8000/chat \
 
 ### 多轮对话
 
-同一 `thread_id` 下的对话历史保存在 `data/checkpoints.db`（SQLite），对话可以跨请求延续：
+同一 `conversation_id` 下的对话历史保存在 LangGraph Postgres checkpoint，对话可以跨请求延续：
 
 ```
-Turn 1: "康德的先验统觉是什么？"  → deepread
-Turn 2: "它和范畴的关系呢？"       → deepread（记得上轮内容）
-Turn 3: "推荐几本认识论相关的书"   → recommend（切换 Agent，上下文保留）
-Turn 4: "帮我制定4周阅读计划"      → plan（继续同一会话）
+Turn 1: 创建 conversation_id=conv-a，提问 "康德的先验统觉是什么？"  → deepread
+Turn 2: 使用同一 conv-a，继续问 "它和范畴的关系呢？"               → deepread（记得上轮内容）
+Turn 3: 同一本书新建 conv-b，开启另一条讨论线                       → 与 conv-a 历史完全隔离
 ```
 
 ### 长期记忆

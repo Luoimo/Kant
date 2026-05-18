@@ -6,7 +6,7 @@ from .types import (
     DeepReadPrompts,
     FollowupPrompts,
     NoteExtractPrompts,
-    ObsidianToolPrompts,
+    NoteToolPrompts,
     PromptBundle,
     RetrieverPrompts,
     RouterPrompts,
@@ -164,7 +164,7 @@ FOLLOWUP = FollowupPrompts(
 )
 
 # ---------------------------------------------------------------------------
-# Note extraction + Obsidian agent
+# Note extraction
 # ---------------------------------------------------------------------------
 NOTE = NoteExtractPrompts(
     extract_system=(
@@ -192,36 +192,36 @@ NOTE = NoteExtractPrompts(
         "- Question core: {summary}\n"
         "- Core concepts: {concepts}\n\n"
         "[Your tasks]\n"
-        "1. Use search_vault_for_concept to look up the concepts above in the Obsidian "
-        "vault and see whether other books already have related notes.\n"
+        "1. Use search_vault_for_concept to look up the concepts above in the Notion "
+        "workspace and see whether other books already have related notes.\n"
         "2. Combine the Q&A and the cross-book links into a well-formatted Markdown "
-        "note with Obsidian backlinks (e.g. [[Other Book]]) and tags (e.g. #concept).\n"
-        "3. You must call append_note_to_obsidian to persist the note (pass the book "
+        "note with backlinks (e.g. [[Other Book]]) and tags (e.g. #concept).\n"
+        "3. You must call append_note_to_workspace to persist the note (pass the book "
         "title as the file argument, e.g. '{book_title}').\n"
         "4. After saving, finish the task and tell the user which links you created.\n"
     ),
     agent_task_suffix=(
         "\n\nStart the note curation task now. Remember to call "
-        "append_note_to_obsidian at the end to persist the note."
+        "append_note_to_workspace at the end to persist the note."
     ),
 )
 
 # ---------------------------------------------------------------------------
-# Obsidian tool descriptions
+# Note tool descriptions
 # ---------------------------------------------------------------------------
-OBSIDIAN = ObsidianToolPrompts(
+NOTE_TOOLS = NoteToolPrompts(
     read_past_desc=(
-        "Read the full history of notes for the current book from the Obsidian vault. "
+        "Read the full history of notes for the current book from the Notion workspace. "
         "Useful to avoid duplication and to pick up the previous line of thought."
     ),
     search_vault_desc=(
-        "Search a concept or keyword across the entire Obsidian vault. "
+        "Search a concept or keyword across the entire Notion workspace. "
         "If a new note mentions an important philosophical concept, use this to see "
         "whether other books touch on it, so that you can create backlinks."
     ),
     append_note_desc=(
         "Append the carefully curated Markdown note (with backlinks) to the corresponding "
-        "book's Obsidian file. After all thinking and formatting are done, you MUST call "
+        "book's Notion page. After all thinking and formatting are done, you MUST call "
         "this tool to persist the note."
     ),
 )
@@ -261,6 +261,6 @@ BUNDLE = PromptBundle(
     critic=CRITIC,
     followup=FOLLOWUP,
     note=NOTE,
-    obsidian=OBSIDIAN,
+    note_tools=NOTE_TOOLS,
     retriever=RETRIEVER,
 )

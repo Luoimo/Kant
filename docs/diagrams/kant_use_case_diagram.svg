@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .system { fill: #ffffff; stroke: #1f4e79; stroke-width: 3; rx: 24; }
+      .module { fill: #eef4fb; stroke: #b9cbe0; stroke-width: 2; rx: 18; }
+      .usecase { fill: #ffffff; stroke: #2e74b5; stroke-width: 2; }
+      .actor-line { stroke: #0f172a; stroke-width: 4; stroke-linecap: round; }
+      .connector { stroke: #64748b; stroke-width: 2.5; fill: none; }
+      .include { stroke: #64748b; stroke-width: 2; fill: none; stroke-dasharray: 8 7; marker-end: url(#arrow); }
+      .title { font: 700 34px Arial, sans-serif; fill: #0b2545; }
+      .subtitle { font: 400 18px Arial, sans-serif; fill: #475569; }
+      .actor-text { font: 700 22px Arial, sans-serif; fill: #0f172a; text-anchor: middle; }
+      .module-title { font: 700 20px Arial, sans-serif; fill: #1f4e79; }
+      .uc-text { font: 600 16px Arial, sans-serif; fill: #172033; text-anchor: middle; dominant-baseline: middle; }
+      .note-title { font: 700 17px Arial, sans-serif; fill: #1f4e79; }
+      .note-text { font: 400 15px Arial, sans-serif; fill: #334155; }
+      .label { font: 400 14px Arial, sans-serif; fill: #64748b; text-anchor: middle; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="1000"/>
+
+  <text class="title" x="800" y="62" text-anchor="middle">Kant Use Case Diagram</text>
+  <text class="subtitle" x="800" y="94" text-anchor="middle">First Presentation Scope View</text>
+
+  <!-- System boundary -->
+  <rect class="system" x="340" y="130" width="920" height="780"/>
+  <text class="module-title" x="800" y="170" text-anchor="middle">Kant System Boundary</text>
+
+  <!-- Actor: Reader -->
+  <circle cx="160" cy="300" r="32" fill="#ffffff" stroke="#0f172a" stroke-width="4"/>
+  <line class="actor-line" x1="160" y1="332" x2="160" y2="430"/>
+  <line class="actor-line" x1="105" y1="370" x2="215" y2="370"/>
+  <line class="actor-line" x1="160" y1="430" x2="112" y2="515"/>
+  <line class="actor-line" x1="160" y1="430" x2="208" y2="515"/>
+  <text class="actor-text" x="160" y="565">Reader / Member</text>
+
+  <!-- Actor: Admin -->
+  <circle cx="1440" cy="300" r="32" fill="#ffffff" stroke="#0f172a" stroke-width="4"/>
+  <line class="actor-line" x1="1440" y1="332" x2="1440" y2="430"/>
+  <line class="actor-line" x1="1385" y1="370" x2="1495" y2="370"/>
+  <line class="actor-line" x1="1440" y1="430" x2="1392" y2="515"/>
+  <line class="actor-line" x1="1440" y1="430" x2="1488" y2="515"/>
+  <text class="actor-text" x="1440" y="565">Administrator</text>
+
+  <!-- Modules -->
+  <rect class="module" x="390" y="205" width="390" height="190"/>
+  <text class="module-title" x="415" y="238">Account &amp; Access</text>
+
+  <rect class="module" x="820" y="205" width="390" height="250"/>
+  <text class="module-title" x="845" y="238">Library &amp; Reading</text>
+
+  <rect class="module" x="390" y="460" width="390" height="360"/>
+  <text class="module-title" x="415" y="493">AI Reading Assistance</text>
+
+  <rect class="module" x="820" y="520" width="390" height="300"/>
+  <text class="module-title" x="845" y="553">Governance &amp; Admin</text>
+
+  <!-- Use cases: Account -->
+  <ellipse class="usecase" cx="585" cy="305" rx="130" ry="36"/>
+  <text class="uc-text" x="585" y="305">Register / Login</text>
+
+  <!-- Use cases: Library -->
+  <ellipse class="usecase" cx="1015" cy="290" rx="130" ry="36"/>
+  <text class="uc-text" x="1015" y="290">Browse Library</text>
+  <ellipse class="usecase" cx="1015" cy="360" rx="130" ry="36"/>
+  <text class="uc-text" x="1015" y="360">Upload EPUB</text>
+  <ellipse class="usecase" cx="1015" cy="430" rx="130" ry="36"/>
+  <text class="uc-text" x="1015" y="430">Read EPUB</text>
+
+  <!-- Use cases: AI -->
+  <ellipse class="usecase" cx="585" cy="555" rx="135" ry="36"/>
+  <text class="uc-text" x="585" y="555">Ask Book Question</text>
+  <ellipse class="usecase" cx="585" cy="625" rx="150" ry="36"/>
+  <text class="uc-text" x="585" y="625">Receive Grounded Answer</text>
+  <ellipse class="usecase" cx="585" cy="695" rx="120" ry="36"/>
+  <text class="uc-text" x="585" y="695">View Citations</text>
+  <ellipse class="usecase" cx="585" cy="765" rx="145" ry="36"/>
+  <text class="uc-text" x="585" y="765">Manage Conversations</text>
+
+  <!-- Use cases: Admin -->
+  <ellipse class="usecase" cx="1015" cy="620" rx="120" ry="36"/>
+  <text class="uc-text" x="1015" y="620">Manage Users</text>
+  <ellipse class="usecase" cx="1015" cy="690" rx="135" ry="36"/>
+  <text class="uc-text" x="1015" y="690">Inspect User Books</text>
+  <ellipse class="usecase" cx="1015" cy="760" rx="128" ry="36"/>
+  <text class="uc-text" x="1015" y="760">View Audit Logs</text>
+
+  <!-- Actor-to-module connectors kept at module level to avoid presentation clutter. -->
+  <path class="connector" d="M 250 330 C 310 280, 350 260, 390 250"/>
+  <path class="connector" d="M 250 385 C 430 380, 610 380, 820 330"/>
+  <path class="connector" d="M 250 500 C 310 560, 345 625, 390 640"/>
+
+  <path class="connector" d="M 1350 330 C 1300 280, 1245 250, 1210 250"/>
+  <path class="connector" d="M 1350 500 C 1300 565, 1245 650, 1210 670"/>
+
+  <text class="label" x="330" y="250">uses</text>
+  <text class="label" x="565" y="372">uses</text>
+  <text class="label" x="330" y="610">uses</text>
+  <text class="label" x="1272" y="250">uses</text>
+  <text class="label" x="1272" y="625">governs</text>
+
+  <!-- Relationship note: internal include/extend details are intentionally summarized
+       to keep this presentation scope diagram readable. -->
+  <!-- Short relationship callout instead of cluttered UML links -->
+  <rect x="805" y="850" width="405" height="70" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text class="note-title" x="830" y="875">Internal AI support for "Ask Book Question"</text>
+  <text class="note-text" x="830" y="900">Safety check, hybrid RAG retrieval, grounded generation, critic review, notes, and follow-ups.</text>
+
+  <!-- Footer note -->
+  <text class="label" x="800" y="955">Detailed LLM, database, retrieval, and deployment components are shown in architecture and sequence diagrams.</text>
+</svg>

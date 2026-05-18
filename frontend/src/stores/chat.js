@@ -1,13 +1,21 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { fetchSSEStream } from '@/composables/useSSEStream'
-import { chatApi } from '@/api'
+import { chatApi, conversationsApi } from '@/api'
 
 export const useChatStore = defineStore('chat', () => {
   const messages = ref([])
   const loading = ref(false)
   const selectedBookId = ref(null)
-  const threadId = ref('default')
+  const conversationId = ref(null)
+
+  async function ensureConversation() {
+    if (!selectedBookId.value) return null
+    if (conversationId.value) return conversationId.value
+    const { data } = await conversationsApi.create(selectedBookId.value, { title: '' })
+    conversationId.value = data.conversation_id
+    return conversationId.value
+  }
 
   async function sendMessageStream(query) {
     const userMsg = { role: 'user', content: query, id: `u-${Date.now()}` }
@@ -27,9 +35,10 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     try {
+      const cid = await ensureConversation()
       await fetchSSEStream(
-        '/chat/stream',
-        { query, book_id: selectedBookId.value || null, thread_id: threadId.value, user_id: 'default' },
+        '/api/user/chat/stream',
+        { query, book_id: selectedBookId.value || null, conversation_id: cid },
         {
           onThinking: () => {
             updateAiMsg({ content: '正在思考…', isStatus: true })
@@ -60,11 +69,13 @@ export const useChatStore = defineStore('chat', () => {
   async function clearMessages() {
     messages.value = []
     try {
-      await chatApi.clearHistory(selectedBookId.value || null, threadId.value || 'default')
+      if (conversationId.value) {
+        await chatApi.clearHistory(conversationId.value)
+      }
     } catch (e) {
       console.error('Failed to clear chat history on server:', e)
     }
   }
 
-  return { messages, loading, selectedBookId, threadId, sendMessageStream, clearMessages }
+  return { messages, loading, selectedBookId, conversationId, sendMessageStream, clearMessages, ensureConversation }
 })

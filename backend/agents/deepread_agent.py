@@ -15,6 +15,7 @@ from llm.openai_client import get_llm
 from prompts import get_prompts
 from rag.chroma.chroma_store import ChromaStore
 from rag.retriever import HybridConfig, HybridRetriever
+from storage.checkpoint_store import CheckpointStore, build_thread_id, get_checkpoint_store
 from xai.citation import Citation, build_citations
 
 sep = "\n\n"
@@ -84,11 +85,13 @@ class DeepReadAgent:
         self,
         *,
         store: ChromaStore | None = None,
+        checkpoint_store: CheckpointStore | None = None,
         collection_name: str | None = None,
         llm=None,
         config: DeepReadConfig | None = None,
     ) -> None:
         self.store = store or ChromaStore()
+        self.checkpoint_store = checkpoint_store or get_checkpoint_store()
         self.llm = llm or get_llm(temperature=0.2)
         self.config = config or DeepReadConfig()
         self._collection_name = collection_name or self.store.collection_name
@@ -239,7 +242,7 @@ class DeepReadAgent:
         @tool
         def search_past_notes(query: str) -> str:
             """Retrieve user's past notes."""
-            from agents.obsidian_tools import search_vault_for_concept
+            from agents.notion_tools import search_vault_for_concept
             return search_vault_for_concept.invoke(query)
 
         search_past_notes.description = prompts.tool_search_notes_desc
@@ -257,127 +260,43 @@ class DeepReadAgent:
     def get_chat_history(
         self,
         *,
-        book_id: str = "",
-        user_id: str = "default",
-        thread_id: str = "default",
+        conversation_id: str,
     ) -> list[dict]:
-        """Fetch chat history for a given user and book."""
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        from pathlib import Path
-        import sqlite3
-        from langchain_core.messages import BaseMessage
-        
-        db_path = Path("data/chat_history.db")
-        if not db_path.exists():
-            return []
-            
-        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
-        
-        try:
-            with sqlite3.connect(db_path, check_same_thread=False) as conn:
-                memory = SqliteSaver(conn)
-                memory.setup()
-                tuple_ = memory.get_tuple({"configurable": {"thread_id": actual_thread}})
-                if not tuple_:
-                    return []
-                    
-                # extract messages from the state
-                state = tuple_.checkpoint.get("channel_values", {})
-                messages = state.get("messages", [])
-                
-                history = []
-                for m in messages:
-                    if not isinstance(m, BaseMessage):
-                        continue
-                    
-                    # Filter out system messages or tool calls if needed
-                    if m.type in ["human", "user"]:
-                        content = m.content
-                        # 尝试剔除后端拼装的系统前缀，只提取真实的 user query
-                        import re
-                        if "【用户问题】：\n" in content:
-                            content = content.split("【用户问题】：\n")[-1]
-                        elif "[历史阅读记录（仅供参考）]" in content:
-                            # 如果包含阅读记录，通常用户问题在最前面
-                            content = content.split("\n\n[历史阅读记录（仅供参考）]")[0]
-                            # 去除可能存在的书籍前缀
-                            content = re.sub(r'^\[当前书籍来源：.*?\]\n\n', '', content)
-                        else:
-                            content = re.sub(r'^\[当前书籍来源：.*?\]\n\n', '', content)
-                            content = re.sub(r'^【当前阅读书籍】：.*?\n\n', '', content)
-                            content = re.sub(r'\n\n【当前阅读章节】：.*$', '', content)
-                            
-                        history.append({"role": "user", "content": content.strip()})
-                    elif m.type in ["ai", "assistant"]:
-                        # Skip if it's just a tool call with no real content
-                        if not m.content and getattr(m, "tool_calls", None):
-                            continue
-                        history.append({"role": "ai", "content": m.content})
-                        
-                return history
-        except Exception as e:
-            logger.error("Failed to load chat history: %s", e)
-            return []
+        """Fetch chat history by conversation id."""
+        return self.checkpoint_store.get_chat_history(
+            conversation_id=conversation_id,
+        )
 
     def clear_chat_history(
         self,
         *,
-        book_id: str = "",
-        user_id: str = "default",
-        thread_id: str = "default",
+        conversation_id: str,
     ) -> None:
-        """Clear chat history for a given user and book."""
-        from pathlib import Path
-        import sqlite3
-        
-        db_path = Path("data/chat_history.db")
-        if not db_path.exists():
-            return
-            
-        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
-        
-        try:
-            with sqlite3.connect(db_path, check_same_thread=False) as conn:
-                conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (actual_thread,))
-                conn.execute("DELETE FROM writes WHERE thread_id = ?", (actual_thread,))
-                conn.commit()
-                logger.info("Successfully cleared chat history for thread %s", actual_thread)
-        except Exception as e:
-            logger.error("Failed to clear chat history: %s", e)
+        """Clear chat history by conversation id."""
+        self.checkpoint_store.clear_chat_history(
+            conversation_id=conversation_id,
+        )
 
     def add_ai_message(
         self,
         content: str,
         *,
+        conversation_id: str,
         book_id: str = "",
-        user_id: str = "default",
-        thread_id: str = "default",
         locale: str | None = None,
     ) -> None:
         """Manually append an AI message (e.g. from CriticAgent) to the chat history."""
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        from pathlib import Path
-        import sqlite3
-        from langchain_core.messages import AIMessage
-
-        db_path = Path("data/chat_history.db")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
-
-        try:
-            with sqlite3.connect(db_path, check_same_thread=False) as conn:
-                memory = SqliteSaver(conn)
-                memory.setup()
-
-                react_agent, _ = self._build(book_source=None, book_id=book_id, memory=memory, locale=locale)
-                react_agent.update_state(
-                    {"configurable": {"thread_id": actual_thread}},
-                    {"messages": [AIMessage(content=content)]}
-                )
-                logger.info("Successfully appended AI message to thread %s", actual_thread)
-        except Exception as e:
-            logger.error("Failed to append AI message to history: %s", e)
+        self.checkpoint_store.add_ai_message(
+            content,
+            conversation_id=conversation_id,
+            locale=locale,
+            agent_builder=lambda *, memory, locale=None: self._build(
+                book_source=None,
+                book_id=book_id,
+                memory=memory,
+                locale=locale,
+            ),
+        )
 
     def run(
         self,
@@ -387,22 +306,14 @@ class DeepReadAgent:
         book_id: str = "",
         memory_context: str = "",
         user_id: str = "default",
-        thread_id: str = "default",
+        conversation_id: str,
         selected_text: str | None = None,
         current_chapter: str | None = None,
         locale: str | None = None,
     ) -> DeepReadResult:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        from pathlib import Path
-        import sqlite3
-
         logger.info("run user=%r query=%r source=%r locale=%r", user_id, query, book_source, locale)
 
-        db_path = Path("data/chat_history.db")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Use a deterministic thread_id based on user and book so chat history is maintained
-        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
+        actual_thread = build_thread_id(conversation_id=conversation_id)
 
         # 提取动态上下文并组装为系统指令
         sys_msg = _build_system_msg(
@@ -414,9 +325,10 @@ class DeepReadAgent:
             locale=locale,
         )
 
-        with sqlite3.connect(db_path, check_same_thread=False) as conn:
-            memory = SqliteSaver(conn)
-            memory.setup()
+        with self.checkpoint_store.create_sync_checkpointer() as memory:
+            setup = getattr(memory, "setup", None)
+            if callable(setup):
+                setup()
 
             react_agent, current_docs = self._build(
                 book_source=book_source, book_id=book_id, memory=memory,
@@ -444,22 +356,14 @@ class DeepReadAgent:
         book_id: str = "",
         memory_context: str = "",
         user_id: str = "default",
-        thread_id: str = "default",
+        conversation_id: str,
         selected_text: str | None = None,
         current_chapter: str | None = None,
         locale: str | None = None,
     ) -> AsyncGenerator[tuple[str, object], None]:
         """Async generator yielding (event_type, data) for SSE streaming."""
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-        from pathlib import Path
-        import aiosqlite
-
         logger.info("stream user=%r query=%r source=%r locale=%r", user_id, query, book_source, locale)
-
-        db_path = Path("data/chat_history.db")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        actual_thread = f"{user_id}_{book_id}" if book_id else thread_id
+        actual_thread = build_thread_id(conversation_id=conversation_id)
 
         sys_msg = _build_system_msg(
             book_title=book_id,
@@ -470,9 +374,12 @@ class DeepReadAgent:
             locale=locale,
         )
 
-        async with aiosqlite.connect(db_path) as conn:
-            memory = AsyncSqliteSaver(conn)
-            memory.setup()
+        async with self.checkpoint_store.create_async_checkpointer() as memory:
+            setup = getattr(memory, "setup", None)
+            if callable(setup):
+                maybe_result = setup()
+                if hasattr(maybe_result, "__await__"):
+                    await maybe_result
 
             react_agent, current_docs = self._build(
                 book_source=book_source, book_id=book_id, memory=memory,

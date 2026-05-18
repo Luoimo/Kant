@@ -21,6 +21,17 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/auth':       { target: 'http://localhost:8000', changeOrigin: true, bypass: htmlBypass },
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        bypass: htmlBypass,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('Accept-Encoding', 'identity')
+          })
+        },
+      },
       '/books':      { target: 'http://localhost:8000', changeOrigin: true, bypass: htmlBypass },
       '/notes':      { target: 'http://localhost:8000', changeOrigin: true, bypass: htmlBypass },
       '/reader':     { target: 'http://localhost:8000', changeOrigin: true, bypass: htmlBypass },

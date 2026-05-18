@@ -35,10 +35,7 @@ class Settings(BaseSettings):
     chroma_tenant: str = "default_tenant"
     chroma_database: str = "default_database"
 
-    # Obsidian
-    obsidian_vault: str = ""
-
-    # Note backend: "obsidian" (local CLI) or "notion" (cloud API)
+    # Note backend (default notion)
     note_backend: str = "notion"
 
     # Notion (仅当 note_backend=notion 时使用)
@@ -56,6 +53,27 @@ class Settings(BaseSettings):
     # SQLite book catalog and cover image directory
     book_catalog_db: str = "data/books.db"
     covers_dir: str = "data/covers"
+
+    # PostgreSQL catalog storage (optional)
+    postgres_dsn: str = ""
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_user: str = "postgres"
+    postgres_password: str = ""
+    postgres_database: str = "kant"
+    postgres_catalog_schema: str = "catalog"
+
+    # 阿里云 OSS（对象存储）：用于 EPUB 原文件和封面图片的云端持久化
+    # 留空则自动退回到本地文件系统（data/books、data/covers），便于本地开发
+    oss_access_key_id: str = ""
+    oss_secret_access_key: str = ""
+    oss_endpoint: str = "oss-cn-beijing.aliyuncs.com"
+    oss_bucket: str = "kant"
+    # OSS 内部路径前缀（相当于目录）
+    oss_books_prefix: str = "books/"
+    oss_covers_prefix: str = "covers/"
+    # 签名 URL 有效期（秒），默认 1 小时
+    oss_signed_url_expires: int = 3600
 
     # Neo4j graph storage (optional)
     neo4j_uri: str = "bolt://localhost:7687"
@@ -81,6 +99,13 @@ class Settings(BaseSettings):
 
     # Lakera Guard
     lakera_guard_api_key: str = ""
+
+    # Auth / Session
+    jwt_secret_key: str = "dev-change-me"
+    jwt_issuer: str = "kant-backend"
+    jwt_access_token_minutes: int = 15
+    jwt_refresh_token_days: int = 30
+    redis_url: str = "redis://localhost:6379/0"
 
 
 def get_settings() -> Settings:

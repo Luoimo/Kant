@@ -6,7 +6,7 @@ from .types import (
     DeepReadPrompts,
     FollowupPrompts,
     NoteExtractPrompts,
-    ObsidianToolPrompts,
+    NoteToolPrompts,
     PromptBundle,
     RetrieverPrompts,
     RouterPrompts,
@@ -133,7 +133,7 @@ FOLLOWUP = FollowupPrompts(
 )
 
 # ---------------------------------------------------------------------------
-# Note extraction + Obsidian agent
+# Note extraction
 # ---------------------------------------------------------------------------
 NOTE = NoteExtractPrompts(
     extract_system=(
@@ -160,29 +160,29 @@ NOTE = NoteExtractPrompts(
         "- 疑问核心：{summary}\n"
         "- 核心概念：{concepts}\n\n"
         "【你的任务】\n"
-        "1. 利用 search_vault_for_concept 工具去 Obsidian 知识库中搜索上述“核心概念”，看看其他书籍是否也有相关笔记。\n"
-        "2. 整合问答内容和搜索到的跨书关联，撰写一段格式优美、带有 Obsidian 双向链接（如 [[其他书名]]）和标签（如 #概念）的 Markdown 笔记。\n"
-        "3. 必须调用 append_note_to_obsidian 工具，将写好的笔记保存到知识库中（注意传入 file 参数时直接使用书名，如 '{book_title}'）。\n"
+        "1. 利用 search_vault_for_concept 工具在 Notion 工作区中搜索上述“核心概念”，看看其他书籍是否也有相关笔记。\n"
+        "2. 整合问答内容和搜索到的跨书关联，撰写一段格式优美、带有双向链接（如 [[其他书名]]）和标签（如 #概念）的 Markdown 笔记。\n"
+        "3. 必须调用 append_note_to_workspace 工具，将写好的笔记保存到知识库中（注意传入 file 参数时直接使用书名，如 '{book_title}'）。\n"
         "4. 完成保存后，结束任务并告诉用户你做了哪些知识串联。\n"
     ),
-    agent_task_suffix="\n\n请开始执行笔记整理任务。请务必最后调用 append_note_to_obsidian 工具进行保存。",
+    agent_task_suffix="\n\n请开始执行笔记整理任务。请务必最后调用 append_note_to_workspace 工具进行保存。",
 )
 
 # ---------------------------------------------------------------------------
-# Obsidian tool descriptions
+# Note tool descriptions
 # ---------------------------------------------------------------------------
-OBSIDIAN = ObsidianToolPrompts(
+NOTE_TOOLS = NoteToolPrompts(
     read_past_desc=(
-        "读取当前书籍在 Obsidian 知识库中的历史笔记全文。"
+        "读取当前书籍在 Notion 笔记库中的历史笔记全文。"
         "这能帮助你了解之前记过什么，从而避免重复，或接续之前的思路。"
     ),
     search_vault_desc=(
-        "在整个 Obsidian 知识库中搜索某个概念或关键词。"
+        "在整个 Notion 工作区中搜索某个概念或关键词。"
         "如果新笔记提到了某个重要的哲学概念，你可以用这个工具看看库里的其他书籍是否也提到过，"
         "从而在整理笔记时使用双向链接将它们串联起来。"
     ),
     append_note_desc=(
-        "将你精心整理并带有双向链接的 Markdown 笔记追加写入到对应书籍的 Obsidian 文件中。"
+        "将你精心整理并带有双向链接的 Markdown 笔记追加写入到对应书籍的 Notion 页面中。"
         "注意：在完成所有思考和内容编排后，必须调用此工具将笔记持久化。"
     ),
 )
@@ -219,6 +219,6 @@ BUNDLE = PromptBundle(
     critic=CRITIC,
     followup=FOLLOWUP,
     note=NOTE,
-    obsidian=OBSIDIAN,
+    note_tools=NOTE_TOOLS,
     retriever=RETRIEVER,
 )

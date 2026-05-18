@@ -40,6 +40,26 @@ def _sanitize_collection_name(title: str) -> str:
     return f"book_{hash16}"
 
 
+def _normalize_where(where: dict | None) -> dict | None:
+    """
+    兼容 Chroma where 语法：
+
+    - 顶层仅允许一个操作符（如 ``$and``）。
+    - 业务层常传入 ``{"a": 1, "b": 2}`` 这样的“多字段等值”过滤；
+      这里统一转换为 ``{"$and": [{"a": 1}, {"b": 2}]}``。
+    """
+    if not where:
+        return where
+    if not isinstance(where, dict):
+        return where
+    if len(where) <= 1:
+        return where
+    if any(str(k).startswith("$") for k in where):
+        # 已经是操作符表达式，不做改写
+        return where
+    return {"$and": [{k: v} for k, v in where.items()]}
+
+
 # ---------------------------------------------------------------------------
 # chromadb 原生包装器（替代 langchain_chroma.Chroma）
 # ---------------------------------------------------------------------------
@@ -193,8 +213,9 @@ class Chroma:
             "n_results": k,
             "include": ["documents", "metadatas", "distances"],
         }
-        if where:
-            query_kwargs["where"] = where
+        normalized_where = _normalize_where(where)
+        if normalized_where:
+            query_kwargs["where"] = normalized_where
         return self._collection.query(**query_kwargs)
 
 
@@ -301,12 +322,17 @@ class ChromaStore:
         path: str | Path,
         *,
         collection_name: str | None = None,
+        source_override: str | None = None,
+        owner_user_id: str = "default",
     ) -> IngestResult:
         """
         EPUB 全流水线入库：提取 → 清洗 → 切块 → 向量化 → 写入 Chroma。
 
-        :param path:            EPUB 文件路径
-        :param collection_name: 指定 collection 名称；None 则自动取书名（推荐）
+        :param path:            本地 EPUB 文件路径（解析只能基于本地文件）
+        :param collection_name: 指定 collection 名称；None 则使用默认共享 collection
+        :param source_override: 写入 chunk metadata 的 source 值。云端部署时传入
+                                ``oss://bucket/key`` 以便与 book_catalog 保持一致；
+                                默认为 ``str(path)``。
         """
         path = Path(path)
         logger.info("开始入库流水线：%s", path.name)
@@ -329,8 +355,22 @@ class ChromaStore:
         logger.info("  → collection：%s", collection_name)
 
         db = self._resolve_db(collection_name)
-        book_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, str(path)))
-        result = self._ingest_chunks_to_db(chunks, db, source=str(path), book_id=book_id)
+        effective_source = source_override or str(path)
+        # 使用 effective_source 计算 book_id，保证无论是否在 OSS，同一来源永远得到同一 id
+        book_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, effective_source))
+
+        # 如果启用了 source_override，需要把每个 chunk 的 metadata.source 也改写
+        if source_override is not None:
+            for c in chunks:
+                c.metadata.source = source_override
+
+        result = self._ingest_chunks_to_db(
+            chunks,
+            db,
+            source=effective_source,
+            book_id=book_id,
+            owner_user_id=owner_user_id,
+        )
         result.book_title = book_content.metadata.get("title", "")
         result.author = book_content.metadata.get("author", "")
         logger.info("  ✓ 入库完成：%s", result)
@@ -342,6 +382,7 @@ class ChromaStore:
         chunks: list[TextChunk],
         *,
         collection_name: str | None = None,
+        owner_user_id: str = "default",
     ) -> IngestResult:
         """
         直接写入预处理好的 :class:`TextChunk` 列表（跳过提取/清洗/切块步骤）。
@@ -350,13 +391,19 @@ class ChromaStore:
         db = self._resolve_db(collection_name)
         source = chunks[0].metadata.source if chunks else ""
         book_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, source)) if source else ""
-        return self._ingest_chunks_to_db(chunks, db, source=source, book_id=book_id)
+        return self._ingest_chunks_to_db(
+            chunks,
+            db,
+            source=source,
+            book_id=book_id,
+            owner_user_id=owner_user_id,
+        )
 
     # ------------------------------------------------------------------
     # 公开：删除接口
     # ------------------------------------------------------------------
 
-    def delete_source(self, source: str) -> int:
+    def delete_source(self, source: str, *, owner_user_id: str = "default") -> int:
         """
         删除指定来源文件的所有 chunk。
 
@@ -364,7 +411,8 @@ class ChromaStore:
         :returns:      实际删除的文档数量
         """
         collection = self._db._collection
-        results = collection.get(where={"source": source})
+        where = _normalize_where({"source": source, "owner_user_id": owner_user_id})
+        results = collection.get(where=where)
         ids = results.get("ids", [])
         if ids:
             collection.delete(ids=ids)
@@ -498,8 +546,9 @@ class ChromaStore:
         """
         db = self._resolve_db(collection_name)
         base_kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
-        if filter:
-            base_kwargs["where"] = filter
+        normalized_filter = _normalize_where(filter)
+        if normalized_filter:
+            base_kwargs["where"] = normalized_filter
 
         all_docs: list[Document] = []
         offset = 0
@@ -551,6 +600,7 @@ class ChromaStore:
         db: Chroma,
         source: str,
         book_id: str = "",
+        owner_user_id: str = "default",
     ) -> IngestResult:
         """
         将 TextChunk 列表写入 Chroma，支持跳过已有 collection 和分批 Embedding。
@@ -588,7 +638,7 @@ class ChromaStore:
         added = 0
         for i in range(0, len(chunks), cfg.embed_batch_size):
             batch = chunks[i: i + cfg.embed_batch_size]
-            documents = [self._chunk_to_document(c, book_id) for c in batch]
+            documents = [self._chunk_to_document(c, book_id, owner_user_id=owner_user_id) for c in batch]
             ids = [c.chunk_id for c in batch]
             db.add_documents(documents=documents, ids=ids)
             added += len(batch)
@@ -604,7 +654,7 @@ class ChromaStore:
         )
 
     @staticmethod
-    def _chunk_to_document(chunk: TextChunk, book_id: str = "") -> Document:
+    def _chunk_to_document(chunk: TextChunk, book_id: str = "", *, owner_user_id: str = "default") -> Document:
         """
         将 :class:`TextChunk` 转换为 LangChain :class:`Document`。
         Chroma 元数据值必须为 str/int/float/bool，page_numbers 序列化为逗号分隔字符串。
@@ -617,6 +667,7 @@ class ChromaStore:
                 "char_count": chunk.char_count,
                 "source": meta.source,
                 "book_id": book_id,
+                "owner_user_id": owner_user_id,
                 "section_indices": _PAGE_SEP.join(str(i) for i in meta.section_indices),
                 "chunk_index": meta.chunk_index,
                 "book_title": meta.book_title,

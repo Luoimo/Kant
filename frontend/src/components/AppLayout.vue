@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NModal, NUpload, NUploadDragger, NButton, NSpin, useMessage } from 'naive-ui'
 import { useBooksStore } from '@/stores/books'
+import { useAuthStore } from '@/stores/auth'
 import { SUPPORTED_LOCALES, persistLocale } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const booksStore = useBooksStore()
+const authStore = useAuthStore()
 const message = useMessage()
 const { t, locale } = useI18n()
 
@@ -20,6 +22,7 @@ onMounted(() => booksStore.fetchBooks())
 
 const navItems = computed(() => [
   { key: 'library', label: t('sidebar.library'), icon: '📚' },
+  ...(authStore.isAdmin ? [{ key: 'admin', label: 'Admin', icon: '🛡️' }] : []),
 ])
 
 const activeNav = computed(() => route.name)
@@ -31,6 +34,11 @@ function go(name) {
 function switchLocale(value) {
   locale.value = value
   persistLocale(value)
+}
+
+async function logout() {
+  await authStore.logout()
+  router.replace({ name: 'login' })
 }
 
 async function handleUpload({ file }) {
@@ -101,6 +109,7 @@ async function handleUpload({ file }) {
       </div>
 
       <button class="upload-btn" @click="showUpload = true">{{ t('sidebar.uploadBook') }}</button>
+      <button class="upload-btn logout-btn" @click="logout">Logout</button>
     </aside>
 
     <!-- ── Main ── -->
@@ -254,6 +263,7 @@ async function handleUpload({ file }) {
 }
 
 .upload-btn:hover { opacity: 0.88; }
+.logout-btn { background: #555; margin-top: 0; }
 
 /* ── Language switch ── */
 .lang-switch {

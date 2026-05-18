@@ -107,9 +107,8 @@ class Mem0Store:
             try:
                 memory = Memory.from_config(config)
                 self._client = memory
-                self._user_id = s.mem0_user_id.strip()
                 self._enabled = True
-                logger.info("Mem0 初始化成功（user_id=%s）", self._user_id)
+                logger.info("Mem0 初始化成功")
             except Exception as e:
                 if s.chroma_api_key:
                     logger.warning(f"Chroma Cloud 初始化失败: {e}。将回退到本地存储。")
@@ -120,7 +119,6 @@ class Mem0Store:
                     
                     memory = Memory.from_config(config)
                     self._client = memory
-                    self._user_id = s.mem0_user_id.strip()
                     self._enabled = True
                     logger.info("Mem0 已回退并使用本地存储初始化成功")
                 else:
@@ -135,14 +133,14 @@ class Mem0Store:
 
     # ------------------------------------------------------------------
 
-    def search(self, query: str, top_k: int = 3) -> list[str]:
+    def search(self, *, user_id: str, query: str, top_k: int = 3) -> list[str]:
         """检索与 query 相关的历史记忆，返回纯文本列表。"""
         if not self._enabled:
             return []
         try:
             raw = self._client.search(
                 query=query,
-                filters={"user_id": self._user_id},
+                filters={"user_id": user_id},
                 limit=top_k,
             )
             logger.debug("Mem0 search 原始返回类型=%s 内容=%s", type(raw).__name__, raw)
@@ -158,7 +156,7 @@ class Mem0Store:
             logger.warning("Mem0 search 失败：%s", exc)
             return []
 
-    def add_qa(self, query: str, answer: str) -> None:
+    def add_qa(self, *, user_id: str, query: str, answer: str) -> None:
         """将一次完整问答存入长期记忆。"""
         if not self._enabled:
             return
@@ -169,19 +167,19 @@ class Mem0Store:
             ]
             result = self._client.add(
                 messages=messages,
-                user_id=self._user_id,
+                user_id=user_id,
                 prompt=USER_MEMORY_EXTRACTION_PROMPT,
             )
             logger.debug("Mem0 add_qa 返回：%s", result)
         except Exception as exc:
             logger.warning("Mem0 add_qa 失败：%s", exc)
 
-    def delete_all(self) -> None:
+    def delete_all(self, *, user_id: str) -> None:
         """清空当前用户的所有记忆。"""
         if not self._enabled:
             return
         try:
-            self._client.delete_all(user_id=self._user_id)
-            logger.info("Mem0 已清空用户 %s 的所有记忆", self._user_id)
+            self._client.delete_all(user_id=user_id)
+            logger.info("Mem0 已清空用户 %s 的所有记忆", user_id)
         except Exception as exc:
             logger.warning("Mem0 delete_all 失败：%s", exc)

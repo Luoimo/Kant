@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kant Test Evidence Report</title>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #64748b;
+      --line: #dbe5ef;
+      --soft: #f4f7fb;
+      --blue: #1f4e79;
+      --good: #0f766e;
+      --warn: #b45309;
+      --bad: #b91c1c;
+    }
+    body {
+      margin: 0;
+      font: 15px/1.5 Arial, Helvetica, sans-serif;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1080px;
+      margin: 40px auto 64px;
+      padding: 0 28px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      color: var(--blue);
+      font-size: 32px;
+    }
+    .subtitle {
+      margin: 0 0 28px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 30px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .metric {
+      display: block;
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--blue);
+    }
+    .label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .good { background: var(--good); }
+    .warn { background: var(--warn); }
+    .bad { background: var(--bad); }
+    h2 {
+      margin-top: 30px;
+      color: var(--blue);
+      border-bottom: 2px solid var(--line);
+      padding-bottom: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 24px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #edf3f9;
+      color: #153d61;
+    }
+    .note {
+      border-left: 4px solid var(--blue);
+      background: #f8fafc;
+      padding: 12px 14px;
+      color: #334155;
+    }
+    code {
+      font-family: "Courier New", monospace;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Kant Test Evidence Report</h1>
+  <p class="subtitle">Readable summary generated from <code>backend/core-results.xml</code> and <code>backend/coverage.xml</code>.</p>
+
+  <p><span class="badge good">Passed</span></p>
+
+  <section class="grid">
+    <div class="card"><span class="metric">161</span><span class="label">Total Tests</span></div>
+    <div class="card"><span class="metric">161</span><span class="label">Passed</span></div>
+    <div class="card"><span class="metric">56.5%</span><span class="label">Line Coverage</span></div>
+    <div class="card"><span class="metric">0.0%</span><span class="label">Branch Coverage</span></div>
+  </section>
+
+  <h2>Automated Test Summary</h2>
+  <table>
+    <thead><tr><th>Test Suite</th><th>Total</th><th>Passed</th><th>Failures</th><th>Errors</th><th>Skipped</th><th>Time</th></tr></thead>
+    <tbody><tr><td>pytest</td><td>161</td><td>161</td><td>0</td><td>0</td><td>0</td><td>40.80s</td></tr></tbody>
+  </table>
+
+  <h2>Coverage Summary</h2>
+  <table>
+    <tbody>
+      <tr><th>Lines Covered</th><td>2036 / 3603</td></tr>
+      <tr><th>Branches Covered</th><td>0 / 0</td></tr>
+      <tr><th>Overall Line Coverage</th><td>56.5%</td></tr>
+      <tr><th>Overall Branch Coverage</th><td>0.0%</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Package Coverage Snapshot</h2>
+  <table>
+    <thead><tr><th>Package</th><th>Line Coverage</th><th>Branch Coverage</th></tr></thead>
+    <tbody><tr><td>tests</td><td>100.0%</td><td>0.0%</td></tr>
+<tr><td>tests.agents</td><td>100.0%</td><td>0.0%</td></tr>
+<tr><td>tests.api</td><td>100.0%</td><td>0.0%</td></tr>
+<tr><td>tests.services</td><td>100.0%</td><td>0.0%</td></tr>
+<tr><td>tests.storage</td><td>100.0%</td><td>0.0%</td></tr>
+<tr><td>tests.rag</td><td>99.7%</td><td>0.0%</td></tr>
+<tr><td>services</td><td>97.2%</td><td>0.0%</td></tr>
+<tr><td>rag.retriever</td><td>90.1%</td><td>0.0%</td></tr>
+<tr><td>rag.chunker</td><td>89.0%</td><td>0.0%</td></tr>
+<tr><td>rag.extracter</td><td>81.1%</td><td>0.0%</td></tr>
+<tr><td>rag.cleaner</td><td>80.7%</td><td>0.0%</td></tr>
+<tr><td>rag.chroma</td><td>74.0%</td><td>0.0%</td></tr>
+<tr><td>storage</td><td>72.6%</td><td>0.0%</td></tr>
+<tr><td>utils</td><td>69.2%</td><td>0.0%</td></tr>
+<tr><td>llm</td><td>50.0%</td><td>0.0%</td></tr>
+<tr><td>.</td><td>48.9%</td><td>0.0%</td></tr></tbody>
+  </table>
+
+  <h2>Assessment Relevance</h2>
+  <table>
+    <thead><tr><th>Evidence</th><th>What It Supports</th><th>Assessment Area</th></tr></thead>
+    <tbody>
+      <tr><td>Automated backend test results</td><td>Validates core backend, RAG, agent, API, and security behaviours.</td><td>Implementation and Testing</td></tr>
+      <tr><td>Coverage report</td><td>Shows that backend code was exercised by automated tests.</td><td>LLMSecOps Quality Control</td></tr>
+      <tr><td>Security test cases</td><td>Demonstrates prompt injection and unsafe input handling.</td><td>AI Security</td></tr>
+      <tr><td>Citation and retrieval tests</td><td>Supports evidence-grounded answer generation.</td><td>Explainable and Responsible AI</td></tr>
+    </tbody>
+  </table>
+
+  <p class="note">This HTML file is intended as a human-readable evidence summary. The raw XML files remain useful as machine-readable CI/CD artifacts.</p>
+</main>
+</body>
+</html>

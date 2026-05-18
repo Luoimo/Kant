@@ -4,20 +4,21 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from api.deps import require_member
 from prompts import get_prompts, normalize_locale
+from storage.conversation_catalog import ConversationCatalog
 
 router = APIRouter(tags=["chat"])
 
 
 class ChatRequest(BaseModel):
     query: str
-    user_id: str = "default"
-    book_id: str | None = None
-    thread_id: str = "default"
+    book_id: str
+    conversation_id: str
     active_tab: str | None = None
     selected_text: str | None = None
     current_chapter: str | None = None
@@ -46,22 +47,22 @@ def _safety_denied_text(reason: str, locale: str | None) -> str:
     return f"当前请求未通过安全检查：{reason}"
 
 
-def _resolve_book(book_id: str) -> tuple[str | None, str]:
+def _resolve_book(*, book_id: str, owner_user_id: str) -> tuple[str | None, str]:
     """Return (book_source, book_title) for a given book_id."""
     if not book_id:
         return None, ""
     from storage.book_catalog import get_book_catalog
-    meta = get_book_catalog().get_by_id(book_id)
+    meta = get_book_catalog().get_by_id(book_id, owner_user_id=owner_user_id)
     if not meta:
         return None, ""
     return meta.get("source"), meta.get("title", "")
 
 
-def _fetch_memory(mem0, query: str) -> str:
+def _fetch_memory(mem0, *, user_id: str, query: str) -> str:
     if not mem0:
         return ""
     try:
-        past = mem0.search(query, top_k=3)
+        past = mem0.search(user_id=user_id, query=query, top_k=3)
         return "\n".join(f"- {m}" for m in past) if past else ""
     except Exception as exc:
         print(f"[chat] mem0 search failed: {exc}")
@@ -69,35 +70,45 @@ def _fetch_memory(mem0, query: str) -> str:
 
 
 def _build_query(req: ChatRequest, book_title: str) -> str:
+    _ = book_title
     return req.query
 
 
 @router.get("/chat/history")
 def get_chat_history(
-    book_id: str | None = None,
-    user_id: str = "default",
-    thread_id: str = "default",
-    request: Request = None
+    conversation_id: str,
+    request: Request,
+    current_user: dict = Depends(require_member),
 ) -> dict[str, Any]:
+    convo = ConversationCatalog().get(owner_user_id=current_user["user_id"], conversation_id=conversation_id)
+    if not convo:
+        raise HTTPException(status_code=404, detail="conversation not found")
     agent = request.app.state.agent
-    history = agent.get_chat_history(book_id=book_id or "", user_id=user_id, thread_id=thread_id)
+    history = agent.get_chat_history(conversation_id=conversation_id)
     return {"messages": history}
 
 
 @router.delete("/chat/history")
 def delete_chat_history(
-    book_id: str | None = None,
-    user_id: str = "default",
-    thread_id: str = "default",
-    request: Request = None
+    conversation_id: str,
+    request: Request,
+    current_user: dict = Depends(require_member),
 ) -> dict[str, str]:
+    convo = ConversationCatalog().get(owner_user_id=current_user["user_id"], conversation_id=conversation_id)
+    if not convo:
+        raise HTTPException(status_code=404, detail="conversation not found")
     agent = request.app.state.agent
-    agent.clear_chat_history(book_id=book_id or "", user_id=user_id, thread_id=thread_id)
+    agent.clear_chat_history(conversation_id=conversation_id)
     return {"status": "ok"}
 
 
-@router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatResponse:
+@router.post("/api/user/chat", response_model=ChatResponse)
+def chat(
+    req: ChatRequest,
+    request: Request,
+    bg: BackgroundTasks,
+    current_user: dict = Depends(require_member),
+) -> ChatResponse:
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=422, detail="query 不能为空")
 
@@ -121,9 +132,16 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
             followups=[],
         )
 
-    book_id = req.book_id or ""
-    book_source, book_title = _resolve_book(book_id)
-    memory_ctx = _fetch_memory(mem0, req.query)
+    owner_user_id = current_user["user_id"]
+    convo = ConversationCatalog().get(owner_user_id=owner_user_id, conversation_id=req.conversation_id)
+    if not convo:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    if convo["book_id"] != req.book_id:
+        raise HTTPException(status_code=403, detail="conversation does not belong to book")
+
+    book_id = req.book_id
+    book_source, book_title = _resolve_book(book_id=book_id, owner_user_id=owner_user_id)
+    memory_ctx = _fetch_memory(mem0, user_id=owner_user_id, query=req.query)
     query = _build_query(req, book_title)
 
     result = agent.run(
@@ -131,19 +149,19 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
         book_source=book_source,
         book_id=book_id,
         memory_context=memory_ctx,
-        user_id=req.user_id,
-        thread_id=req.thread_id,
+        user_id=owner_user_id,
+        conversation_id=req.conversation_id,
         selected_text=req.selected_text,
         current_chapter=req.current_chapter,
         locale=locale,
     )
 
     if book_title:
-        bg.add_task(_run_note_hook, note_agent, req.query, result.answer, book_title, book_id, locale)
+        bg.add_task(_run_note_hook, note_agent, req.query, result.answer, book_title, book_id, owner_user_id, locale)
 
     if mem0 and result.answer:
         try:
-            mem0.add_qa(req.query, result.answer)
+            mem0.add_qa(user_id=owner_user_id, query=req.query, answer=result.answer)
         except Exception as exc:
             print(f"[chat] mem0 save failed: {exc}")
 
@@ -160,8 +178,12 @@ def chat(req: ChatRequest, request: Request, bg: BackgroundTasks) -> ChatRespons
     )
 
 
-@router.post("/chat/stream")
-async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
+@router.post("/api/user/chat/stream")
+async def chat_stream(
+    req: ChatRequest,
+    request: Request,
+    current_user: dict = Depends(require_member),
+) -> StreamingResponse:
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=422, detail="query 不能为空")
 
@@ -183,9 +205,16 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
             yield f"data: {json.dumps({'type': 'error', 'message': denied_msg}, ensure_ascii=False)}\n\n"
         return StreamingResponse(_denied(), media_type="text/event-stream")
 
-    book_id = req.book_id or ""
-    book_source, book_title = _resolve_book(book_id)
-    memory_ctx = _fetch_memory(mem0, req.query)
+    owner_user_id = current_user["user_id"]
+    convo = ConversationCatalog().get(owner_user_id=owner_user_id, conversation_id=req.conversation_id)
+    if not convo:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    if convo["book_id"] != req.book_id:
+        raise HTTPException(status_code=403, detail="conversation does not belong to book")
+
+    book_id = req.book_id
+    book_source, book_title = _resolve_book(book_id=book_id, owner_user_id=owner_user_id)
+    memory_ctx = _fetch_memory(mem0, user_id=owner_user_id, query=req.query)
     query = _build_query(req, book_title)
 
     async def event_generator():
@@ -214,8 +243,8 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                 book_source=book_source,
                 book_id=book_id,
                 memory_context=memory_ctx,
-                user_id=req.user_id,
-                thread_id=req.thread_id,
+                user_id=owner_user_id,
+                conversation_id=req.conversation_id,
                 selected_text=req.selected_text,
                 current_chapter=req.current_chapter,
                 locale=locale,
@@ -256,9 +285,8 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
                 asyncio.to_thread(
                     agent.add_ai_message,
                     content=critic_full,
+                    conversation_id=req.conversation_id,
                     book_id=book_id,
-                    user_id=req.user_id,
-                    thread_id=req.thread_id,
                     locale=locale,
                 )
             ))
@@ -266,12 +294,12 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
         if book_title:
             tasks.append(asyncio.create_task(
                 asyncio.to_thread(
-                    _run_note_hook, note_agent, req.query, full_answer, book_title, book_id, locale,
+                    _run_note_hook, note_agent, req.query, full_answer, book_title, book_id, owner_user_id, locale,
                 )
             ))
         if mem0 and full_answer:
             tasks.append(asyncio.create_task(
-                asyncio.to_thread(mem0.add_qa, req.query, full_answer)
+                asyncio.to_thread(mem0.add_qa, user_id=owner_user_id, query=req.query, answer=full_answer)
             ))
 
         if followup_agent and full_answer:
@@ -288,9 +316,10 @@ async def chat_stream(req: ChatRequest, request: Request) -> StreamingResponse:
 
 def _run_note_hook(
     note_agent, query: str, answer: str, book_title: str, book_id: str,
+    user_id: str,
     locale: str | None = None,
 ) -> None:
     try:
-        note_agent.process_qa(query, answer, book_title, book_id=book_id, locale=locale)
+        note_agent.process_qa(query, answer, book_title, book_id=book_id, user_id=user_id, locale=locale)
     except Exception as exc:
         print(f"[chat] note hook failed: {exc}")

@@ -4,7 +4,7 @@ langchain-text-splitters>=0.3.0
 langsmith>=0.1.0
 pydantic-settings>=2.0.0
 langgraph>=0.2.0
-langgraph-checkpoint-sqlite>=2.0.0
+langgraph-checkpoint-postgres>=2.0.0
 chromadb>=0.5.0
 tiktoken>=0.7.0
 unstructured>=0.14.0
@@ -25,6 +25,7 @@ jieba>=0.42.1
 # 测试依赖
 pytest>=8.0.0
 pytest-cov>=5.0.0
+ragas>=0.4.3
 
 pip>=24.0
 emoji>=2.12.0
@@ -48,6 +49,9 @@ uvicorn[standard]>=0.30.0
 
 python-multipart>=0.0.26
 neo4j>=5.28.0
+psycopg[binary]>=3.2.0
+# 阿里云 OSS SDK，用于 EPUB 原文件与封面图片的云端对象存储
+oss2>=2.19.0
 # 可选：HanLP 本地图谱抽取后端（无 LLM API 费用，首次运行自动下载模型 ~400MB）
 hanlp>=2.1.0
 # 可选：HanLP 云端 RESTful 客户端（配合 API Key，不下载本地模型）
@@ -55,3 +59,6 @@ hanlp-restful>=0.0.24
 
 # Notion 官方 API 客户端（note_backend=notion 时启用）
 notion-client>=2.2.1
+PyJWT>=2.9.0
+redis>=5.0.0
+passlib[argon2]>=1.7.4

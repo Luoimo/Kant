@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { NInput } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { fetchSSEStream } from '@/composables/useSSEStream'
-import { chatApi } from '@/api'
+import { chatApi, conversationsApi } from '@/api'
 
 const { t, locale } = useI18n()
 
@@ -23,6 +23,7 @@ const messages   = ref([])
 const inputText  = ref('')
 const loading    = ref(false)
 const messagesEl = ref(null)
+const conversationId = ref(null)
 
 // When new selectedText arrives, scroll to bottom and focus the quote bar
 watch(() => props.selectedText, async (val) => {
@@ -74,13 +75,16 @@ async function send() {
   }
 
   try {
+    if (!conversationId.value && props.bookId) {
+      const created = await conversationsApi.create(props.bookId, { title: '' })
+      conversationId.value = created.data.conversation_id
+    }
     await fetchSSEStream(
-      '/chat/stream',
+      '/api/user/chat/stream',
       {
         query: q,
-        book_id: props.bookId || null,
-        thread_id: 'reader-default',
-        user_id: 'default',
+        book_id: props.bookId,
+        conversation_id: conversationId.value,
         selected_text: selectedText,
         current_chapter: props.currentChapter || null,
         locale: locale.value,
@@ -121,7 +125,9 @@ function onKeydown(e) {
 async function clearMessages() {
   messages.value = []
   try {
-    await chatApi.clearHistory(props.bookId || null, 'reader-default')
+    if (conversationId.value) {
+      await chatApi.clearHistory(conversationId.value)
+    }
   } catch (e) {
     console.error('Failed to clear chat history on server:', e)
   }
@@ -130,7 +136,14 @@ async function clearMessages() {
 onMounted(async () => {
   if (props.bookId) {
     try {
-      const res = await chatApi.history(props.bookId)
+      const list = await conversationsApi.list(props.bookId)
+      if (list.data?.length) {
+        conversationId.value = list.data[0].conversation_id
+      } else {
+        const created = await conversationsApi.create(props.bookId, { title: '' })
+        conversationId.value = created.data.conversation_id
+      }
+      const res = await chatApi.history(conversationId.value)
       if (res.data && res.data.messages) {
         messages.value = res.data.messages.map((m, i) => ({
           id: `hist-${i}`,
