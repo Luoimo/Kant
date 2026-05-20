@@ -43,6 +43,7 @@ pluggy>=1.4.0
 iniconfig>=2.0.0
 numpy>=1.26.0
 pydantic>=2.7.0
+email-validator>=2.1.0
 fastapi~=0.135.1
 python-dotenv~=1.2.2
 uvicorn[standard]>=0.30.0
