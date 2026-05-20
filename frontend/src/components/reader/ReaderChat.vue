@@ -24,6 +24,8 @@ const inputText  = ref('')
 const loading    = ref(false)
 const messagesEl = ref(null)
 const conversationId = ref(null)
+const loadingHistory = ref(false)
+let historyLoadSeq = 0
 
 // When new selectedText arrives, scroll to bottom and focus the quote bar
 watch(() => props.selectedText, async (val) => {
@@ -41,6 +43,13 @@ watch(
   }
 )
 
+watch(
+  () => props.bookId,
+  (bookId) => {
+    loadConversationHistory(bookId)
+  }
+)
+
 function scrollToBottom() {
   if (messagesEl.value) {
     messagesEl.value.scrollTop = messagesEl.value.scrollHeight
@@ -49,7 +58,7 @@ function scrollToBottom() {
 
 async function send() {
   const q = inputText.value.trim()
-  if (!q || loading.value) return
+  if (!q || loading.value || loadingHistory.value) return
 
   const selectedText = props.selectedText || null
   inputText.value = ''
@@ -133,29 +142,43 @@ async function clearMessages() {
   }
 }
 
-onMounted(async () => {
-  if (props.bookId) {
-    try {
-      const list = await conversationsApi.list(props.bookId)
-      if (list.data?.length) {
-        conversationId.value = list.data[0].conversation_id
-      } else {
-        const created = await conversationsApi.create(props.bookId, { title: '' })
-        conversationId.value = created.data.conversation_id
-      }
-      const res = await chatApi.history(conversationId.value)
-      if (res.data && res.data.messages) {
-        messages.value = res.data.messages.map((m, i) => ({
-          id: `hist-${i}`,
-          role: m.role,
-          content: m.content,
-          streaming: false,
-        }))
-      }
-    } catch (e) {
-      console.error('Failed to load chat history:', e)
+async function loadConversationHistory(bookId) {
+  const seq = ++historyLoadSeq
+  conversationId.value = null
+  messages.value = []
+  if (!bookId) return
+
+  loadingHistory.value = true
+  try {
+    const list = await conversationsApi.list(bookId)
+    if (seq !== historyLoadSeq) return
+    if (list.data?.length) {
+      conversationId.value = list.data[0].conversation_id
+    } else {
+      const created = await conversationsApi.create(bookId, { title: '' })
+      if (seq !== historyLoadSeq) return
+      conversationId.value = created.data.conversation_id
     }
+
+    const res = await chatApi.history(conversationId.value)
+    if (seq !== historyLoadSeq) return
+    if (res.data && res.data.messages) {
+      messages.value = res.data.messages.map((m, i) => ({
+        id: `hist-${i}`,
+        role: m.role,
+        content: m.content,
+        streaming: false,
+      }))
+    }
+  } catch (e) {
+    console.error('Failed to load chat history:', e)
+  } finally {
+    if (seq === historyLoadSeq) loadingHistory.value = false
   }
+}
+
+onMounted(() => {
+  loadConversationHistory(props.bookId)
 })
 </script>
 
