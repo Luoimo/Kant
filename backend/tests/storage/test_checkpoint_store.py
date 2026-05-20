@@ -19,7 +19,7 @@ def test_create_sync_checkpointer_requires_postgres_dsn():
         with store.create_sync_checkpointer():
             pass
     except RuntimeError as exc:
-        assert "POSTGRES_DSN is required" in str(exc)
+        assert "POSTGRES_DSN or DATABASE_URL is required" in str(exc)
     else:
         raise AssertionError("Expected RuntimeError when POSTGRES_DSN is missing.")
 
@@ -35,6 +35,23 @@ def test_create_sync_checkpointer_uses_postgres_when_dsn_present(monkeypatch):
     monkeypatch.setattr(CheckpointStore, "_create_postgres_checkpointer", lambda self: fake_postgres())
 
     store = CheckpointStore(settings=SimpleNamespace(postgres_dsn="postgresql://example"))
+    with store.create_sync_checkpointer():
+        pass
+
+    assert created == ["postgres"]
+
+
+def test_create_sync_checkpointer_uses_database_url(monkeypatch):
+    created = []
+
+    @contextmanager
+    def fake_postgres():
+        created.append("postgres")
+        yield object()
+
+    monkeypatch.setattr(CheckpointStore, "_create_postgres_checkpointer", lambda self: fake_postgres())
+
+    store = CheckpointStore(settings=SimpleNamespace(postgres_dsn="", database_url="postgresql://example"))
     with store.create_sync_checkpointer():
         pass
 

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
 
     # PostgreSQL catalog storage (optional)
     postgres_dsn: str = ""
+    database_url: str = ""
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_user: str = "postgres"

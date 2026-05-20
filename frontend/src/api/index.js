@@ -6,9 +6,10 @@ import {
   isAuthEndpoint,
   refreshAccessToken,
 } from '@/auth/tokenManager'
+import { apiBaseUrl } from './baseUrl'
 
 const api = axios.create({
-  baseURL: '/',
+  baseURL: apiBaseUrl || '/',
   timeout: 30000,
 })
 

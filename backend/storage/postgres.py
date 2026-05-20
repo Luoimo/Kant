@@ -149,6 +149,8 @@ def build_postgres_dsn(settings: Settings | None = None) -> str:
     current = settings or get_settings()
     if current.postgres_dsn:
         return current.postgres_dsn
+    if current.database_url:
+        return current.database_url
     return (
         f"postgresql://{current.postgres_user}:{current.postgres_password}"
         f"@{current.postgres_host}:{current.postgres_port}/{current.postgres_database}"

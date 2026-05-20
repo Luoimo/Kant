@@ -76,6 +76,7 @@ def test_build_postgres_dsn_from_components() -> None:
 def test_build_postgres_dsn_prefers_explicit_value() -> None:
     settings = Settings(
         postgres_dsn="postgresql://service:pass@db.example.com:5432/kant",
+        database_url="postgresql://database-url",
         postgres_host="ignored",
         postgres_port=1111,
         postgres_user="ignored",
@@ -86,6 +87,17 @@ def test_build_postgres_dsn_prefers_explicit_value() -> None:
     dsn = build_postgres_dsn(settings)
 
     assert dsn == "postgresql://service:pass@db.example.com:5432/kant"
+
+
+def test_build_postgres_dsn_uses_database_url() -> None:
+    settings = Settings(
+        postgres_dsn="",
+        database_url="postgresql://service:pass@db.internal:5432/kant",
+    )
+
+    dsn = build_postgres_dsn(settings)
+
+    assert dsn == "postgresql://service:pass@db.internal:5432/kant"
 
 
 def test_get_postgres_catalog_config_returns_normalized_schema() -> None:

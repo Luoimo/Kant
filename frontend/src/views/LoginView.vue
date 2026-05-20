@@ -34,11 +34,11 @@ async function submit() {
 
   if (isRegister.value) {
     if (password.value.length < 8) {
-      error.value = '密码至少 8 位'
+      error.value = 'Password must be at least 8 characters'
       return
     }
     if (password.value !== confirmPassword.value) {
-      error.value = '两次输入的密码不一致'
+      error.value = 'Passwords do not match'
       return
     }
   }
@@ -47,7 +47,7 @@ async function submit() {
   try {
     if (isRegister.value) {
       await authStore.register(email.value, password.value)
-      success.value = '注册成功，正在自动登录...'
+      success.value = 'Registered successfully, signing in...'
     }
     const data = await authStore.login(email.value, password.value)
     if (data.role === 'admin') router.replace({ name: 'admin' })
@@ -64,7 +64,7 @@ async function submit() {
   <div class="login-page">
     <div class="card">
       <h1>{{ isRegister ? 'Kant Register' : 'Kant Login' }}</h1>
-      <p class="sub">{{ isRegister ? '创建平台账号并自动登录' : '使用平台账号登录' }}</p>
+      <p class="sub">{{ isRegister ? 'Create an account and sign in automatically' : 'Sign in with your account' }}</p>
       <input v-model.trim="email" type="email" placeholder="Email" />
       <input v-model.trim="password" type="password" placeholder="Password" @keydown.enter="submit" />
       <input
@@ -75,12 +75,12 @@ async function submit() {
         @keydown.enter="submit"
       />
       <button :disabled="loading" @click="submit">
-        {{ loading ? '请稍候...' : (isRegister ? '注册并登录' : '登录') }}
+        {{ loading ? 'Please wait...' : (isRegister ? 'Register & Sign In' : 'Sign In') }}
       </button>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="success" class="success">{{ success }}</p>
       <button class="link-btn" :disabled="loading" @click="switchMode(isRegister ? 'login' : 'register')">
-        {{ isRegister ? '已有账号？去登录' : '没有账号？去注册' }}
+        {{ isRegister ? 'Already have an account? Sign in' : "Don't have an account? Register" }}
       </button>
     </div>
   </div>

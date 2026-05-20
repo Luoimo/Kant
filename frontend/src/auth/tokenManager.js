@@ -1,3 +1,5 @@
+import { withApiBaseUrl } from '@/api/baseUrl'
+
 const ACCESS_TOKEN_KEY = 'access_token'
 const REFRESH_TOKEN_KEY = 'refresh_token'
 const USER_ID_KEY = 'user_id'
@@ -109,7 +111,7 @@ export async function refreshAccessToken() {
   }
 
   refreshPromise = (async () => {
-    const response = await fetch('/auth/refresh', {
+    const response = await fetch(withApiBaseUrl('/auth/refresh'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: currentRefresh }),
@@ -184,13 +186,13 @@ export async function fetchWithAuthRefresh(
   }
 
   await attachToken()
-  let response = await fetch(url, { ...init, headers })
+  let response = await fetch(withApiBaseUrl(url), { ...init, headers })
 
   if (response.status === 401 && retryOn401 && !isAuthEndpoint(url)) {
     await refreshAccessToken()
     const token = getAccessToken()
     if (token) headers.set('Authorization', `Bearer ${token}`)
-    response = await fetch(url, { ...init, headers })
+    response = await fetch(withApiBaseUrl(url), { ...init, headers })
   }
   return response
 }

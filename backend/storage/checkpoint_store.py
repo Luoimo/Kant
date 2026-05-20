@@ -123,18 +123,21 @@ class CheckpointStore:
             logger.error("Failed to append AI message to history: %s", exc)
 
     def _require_postgres_dsn(self) -> None:
-        if not self.settings.postgres_dsn:
-            raise RuntimeError("POSTGRES_DSN is required for checkpoint storage.")
+        if not self._postgres_dsn():
+            raise RuntimeError("POSTGRES_DSN or DATABASE_URL is required for checkpoint storage.")
+
+    def _postgres_dsn(self) -> str:
+        return self.settings.postgres_dsn or getattr(self.settings, "database_url", "")
 
     def _create_postgres_checkpointer(self) -> AbstractContextManager[Any]:
         from langgraph.checkpoint.postgres import PostgresSaver
 
-        return PostgresSaver.from_conn_string(self.settings.postgres_dsn)
+        return PostgresSaver.from_conn_string(self._postgres_dsn())
 
     def _create_async_postgres_checkpointer(self) -> AbstractAsyncContextManager[Any]:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-        return AsyncPostgresSaver.from_conn_string(self.settings.postgres_dsn)
+        return AsyncPostgresSaver.from_conn_string(self._postgres_dsn())
 
 
 def get_checkpoint_store(settings: Settings | None = None) -> CheckpointStore:

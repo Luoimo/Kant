@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
@@ -32,7 +33,7 @@ class BookEntry(BaseModel):
     author: str
     source: str
     total_chunks: int
-    added_at: str
+    added_at: datetime
     cover_path: str
     status: str
     progress: float
