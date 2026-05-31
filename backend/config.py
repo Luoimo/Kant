@@ -76,19 +76,20 @@ class Settings(BaseSettings):
     # 签名 URL 有效期（秒），默认 1 小时
     oss_signed_url_expires: int = 3600
 
-    # Neo4j graph storage (optional)
-    neo4j_uri: str = "bolt://localhost:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str = "graphneo4j"
+    # Knowledge graph is disabled by default for the ACK demo deployment.
+    enable_knowledge_graph: bool = False
+    neo4j_uri: str = ""
+    neo4j_user: str = ""
+    neo4j_password: str = ""
     neo4j_database: str = "neo4j"
 
-    # 知识图谱抽取后端:
+    # 知识图谱抽取后端（仅 enable_knowledge_graph=true 时使用）:
     # - "llm":              gpt-4o-mini NER + RE
     # - "hanlp":            本地 HanLP NER + OpenIE
     # - "hanlp_ner_llm_re": HanLP RESTful NER + LLM RE
-    graph_extractor_backend: str = "hanlp_ner_llm_re"
+    graph_extractor_backend: str = "llm"
     hanlp_api_url: str = "https://www.hanlp.com/hanlp/v21/redirect"
-    hanlp_api_key: str = "69e9e04aeaf61a3aca91b90f"
+    hanlp_api_key: str = ""
     hanlp_language: str = "zh"
     hanlp_ner_task: str = "ner/ontonotes"
 
@@ -107,6 +108,18 @@ class Settings(BaseSettings):
     jwt_access_token_minutes: int = 15
     jwt_refresh_token_days: int = 30
     redis_url: str = "redis://localhost:6379/0"
+    cors_allow_origins: str = ""
+
+    @property
+    def cors_origins(self) -> list[str]:
+        origins = [
+            origin.strip()
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip()
+        ]
+        if origins:
+            return origins
+        return ["http://localhost:5173", "http://localhost:3000"]
 
 
 def get_settings() -> Settings:

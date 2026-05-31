@@ -41,3 +41,10 @@ def test_list_books_accepts_datetime_added_at(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()[0]["added_at"] == "2026-05-20T12:00:00Z"
+
+
+def test_books_router_imports_without_neo4j_dependency(monkeypatch):
+    import api.books as books_module
+
+    monkeypatch.delenv("ENABLE_KNOWLEDGE_GRAPH", raising=False)
+    assert books_module._knowledge_graph_enabled() is False

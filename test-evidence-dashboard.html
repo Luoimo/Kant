@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kant Test Evidence Dashboard</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #182230;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --green: #16835b;
+      --green-soft: #e9f7f0;
+      --blue: #285aa8;
+      --blue-soft: #eaf1ff;
+      --amber: #9a5b00;
+      --amber-soft: #fff4db;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --violet: #5b3ea4;
+      --teal: #087a83;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(40, 90, 168, 0.08), rgba(40, 90, 168, 0) 260px),
+        var(--bg);
+    }
+
+    .page {
+      width: 1440px;
+      min-height: 900px;
+      margin: 0 auto;
+      padding: 46px 58px 54px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 48px;
+      align-items: flex-start;
+      margin-bottom: 28px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 42px;
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.5;
+      max-width: 760px;
+    }
+
+    .stamp {
+      min-width: 330px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.78);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+    }
+
+    .stamp-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 5px 0;
+      font-size: 14px;
+    }
+
+    .stamp-row span:first-child { color: var(--muted); }
+    .stamp-row span:last-child { font-weight: 650; }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .kpi {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px;
+      min-height: 122px;
+    }
+
+    .kpi .label {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .kpi .value {
+      margin-top: 15px;
+      font-size: 40px;
+      line-height: 1;
+      font-weight: 780;
+      letter-spacing: 0;
+    }
+
+    .kpi .note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .pass { color: var(--green); background: var(--green-soft); }
+    .fail { color: var(--red); background: var(--red-soft); }
+    .warn { color: var(--amber); background: var(--amber-soft); }
+    .info { color: var(--blue); background: var(--blue-soft); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 22px;
+    }
+
+    .panel h2 {
+      margin: 0 0 18px;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .bars {
+      display: grid;
+      gap: 14px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 110px 1fr 48px;
+      align-items: center;
+      gap: 14px;
+      font-size: 15px;
+    }
+
+    .bar-label { font-weight: 680; }
+
+    .track {
+      height: 18px;
+      border-radius: 999px;
+      background: #edf1f6;
+      overflow: hidden;
+    }
+
+    .bar {
+      height: 100%;
+      border-radius: 999px;
+    }
+
+    .bar.rag { width: 78.95%; background: var(--blue); }
+    .bar.storage { width: 12.11%; background: var(--teal); }
+    .bar.api { width: 4.21%; background: var(--violet); }
+    .bar.agents { width: 2.63%; background: var(--amber); }
+    .bar.auth { width: 2.10%; background: var(--green); }
+
+    .coverage {
+      display: grid;
+      gap: 12px;
+    }
+
+    .risk {
+      display: grid;
+      grid-template-columns: 158px 1fr;
+      gap: 14px;
+      padding: 13px 0;
+      border-bottom: 1px solid #eef1f5;
+    }
+
+    .risk:last-child { border-bottom: 0; }
+    .risk-name { font-weight: 740; }
+    .risk-evidence { color: var(--muted); line-height: 1.38; font-size: 15px; }
+
+    .footer-band {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 18px;
+    }
+
+    .proof {
+      background: #101828;
+      color: #ffffff;
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      min-height: 126px;
+    }
+
+    .proof h3 {
+      margin: 0 0 12px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    .proof p {
+      margin: 0;
+      color: #d0d5dd;
+      line-height: 1.48;
+      font-size: 15px;
+    }
+
+    .result-line {
+      margin-top: 16px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #86efac;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 78px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 740;
+    }
+
+    .caption {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <section>
+        <h1>Kant Test Evidence Dashboard</h1>
+        <p class="subtitle">
+          Automated pytest evidence for backend correctness, RAG quality, AI workflow behavior,
+          authentication, persistence, and API contracts.
+        </p>
+      </section>
+      <aside class="stamp">
+        <div class="stamp-row"><span>Test source</span><span>pytest JUnit XML</span></div>
+        <div class="stamp-row"><span>Timestamp</span><span>2026-05-20 14:07 UTC</span></div>
+        <div class="stamp-row"><span>Runner</span><span>runnervmg397c</span></div>
+        <div class="stamp-row"><span>Suite runtime</span><span>11.871s</span></div>
+      </aside>
+    </header>
+
+    <section class="kpis" aria-label="Test result summary">
+      <div class="kpi">
+        <div class="label">Total Tests</div>
+        <div class="value">190</div>
+        <div class="note">Automated cases collected</div>
+      </div>
+      <div class="kpi pass">
+        <div class="label">Passed</div>
+        <div class="value">190</div>
+        <div class="note">100% pass rate</div>
+      </div>
+      <div class="kpi fail">
+        <div class="label">Failures</div>
+        <div class="value">0</div>
+        <div class="note">No assertion failures</div>
+      </div>
+      <div class="kpi warn">
+        <div class="label">Errors</div>
+        <div class="value">0</div>
+        <div class="note">No runtime errors</div>
+      </div>
+      <div class="kpi info">
+        <div class="label">Skipped</div>
+        <div class="value">0</div>
+        <div class="note">Full suite executed</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Test Cases by Module</h2>
+        <div class="bars">
+          <div class="bar-row">
+            <div class="bar-label">RAG</div>
+            <div class="track"><div class="bar rag"></div></div>
+            <strong>150</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Storage</div>
+            <div class="track"><div class="bar storage"></div></div>
+            <strong>23</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">API</div>
+            <div class="track"><div class="bar api"></div></div>
+            <strong>8</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Agents</div>
+            <div class="track"><div class="bar agents"></div></div>
+            <strong>5</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Auth</div>
+            <div class="track"><div class="bar auth"></div></div>
+            <strong>4</strong>
+          </div>
+        </div>
+        <p class="caption">
+          Grouped by pytest classname prefixes: tests.rag, tests.storage, tests.api, tests.agents, and tests.auth.
+        </p>
+      </article>
+
+      <article class="panel">
+        <h2>Risk Coverage Matrix</h2>
+        <div class="coverage">
+          <div class="risk">
+            <div class="risk-name">RAG quality</div>
+            <div class="risk-evidence">EPUB extraction, text cleaning, chunking, Chroma ingest, BM25, reranking, hybrid retrieval.</div>
+          </div>
+          <div class="risk">
+            <div class="risk-name">AI workflow</div>
+            <div class="risk-evidence">Note agent processing, chat integration, streaming chat, router, critic, follow-up generation.</div>
+          </div>
+          <div class="risk">
+            <div class="risk-name">Security</div>
+            <div class="risk-evidence">Unsafe input is blocked before agent execution; admin route access is protected.</div>
+          </div>
+          <div class="risk">
+            <div class="risk-name">Persistence</div>
+            <div class="risk-evidence">PostgreSQL catalog SQL, checkpoint storage, DATABASE_URL compatibility, rollback behavior.</div>
+          </div>
+          <div class="risk">
+            <div class="risk-name">API contract</div>
+            <div class="risk-evidence">Books API datetime serialization, conversations API, chat history endpoints, auth token roundtrip.</div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="footer-band">
+      <article class="proof">
+        <h3>CI-Ready Evidence</h3>
+        <p>The JUnit XML can be uploaded by CI/CD systems and attached as a test artifact for reproducible grading.</p>
+        <div class="result-line">pytest tests: 190 passed, 0 failed</div>
+      </article>
+      <article class="proof">
+        <h3>System Confidence</h3>
+        <p>The suite covers data ingestion, retrieval, AI orchestration, user-facing API behavior, and storage boundaries.</p>
+        <div class="result-line">runtime: 11.871s</div>
+      </article>
+      <article class="proof">
+        <h3>Presentation Message</h3>
+        <p>Evidence demonstrates that Kant's MVP behavior is tested across core backend, RAG, security, and persistence layers.</p>
+        <div class="result-line">status: green</div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

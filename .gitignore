@@ -49,8 +49,10 @@ Thumbs.db
 # 参考项目
 reference
 
-# 文档产物
+# 文档、临时文件和本地工具产物
 docs/
+tmp/
+tools/
 
 #前端
 frontend/node_modules
@@ -70,6 +72,9 @@ backend/.pyinstaller_cache/
 # 前端构建产物
 frontend/dist/
 frontend/.vite/
+
+# Kubernetes 生产密钥
+k8s/secret.prod.yaml
 
 # 本地桌面数据目录（打包运行时生成）
 .KantData/

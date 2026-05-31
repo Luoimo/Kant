@@ -1,0 +1,91 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kant-web
+  namespace: kant
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /books
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /chat
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /covers
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /ebooks
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /notes
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /reader
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /companions
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-backend
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kant-frontend
+                port:
+                  name: http

@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kant-backend
+  namespace: kant
+  labels:
+    app: kant-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kant-backend
+  template:
+    metadata:
+      labels:
+        app: kant-backend
+    spec:
+      containers:
+        - name: backend
+          image: crpi-vqzgcvtc07egicyr.ap-southeast-1.personal.cr.aliyuncs.com/kant_al/kant-backend:v1-amd64
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: kant-backend-config
+            - secretRef:
+                name: kant-backend-secret
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kant-backend
+  namespace: kant
+  labels:
+    app: kant-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: kant-backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

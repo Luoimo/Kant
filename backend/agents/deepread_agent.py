@@ -10,7 +10,7 @@ from typing import Any, AsyncGenerator
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 
-from graph.neo4j_store import get_neo4j_store
+from config import get_settings
 from llm.openai_client import get_llm
 from prompts import get_prompts
 from rag.chroma.chroma_store import ChromaStore
@@ -41,7 +41,7 @@ class DeepReadConfig:
     fetch_k: int = 20
     max_evidence: int = 8
     hybrid: HybridConfig | None = None
-    enable_graph_retrieval: bool = True
+    enable_graph_retrieval: bool = False
     graph_seed_top_k: int = 6
     graph_expand_top_k: int = 10
     graph_chunk_k: int = 24
@@ -93,7 +93,12 @@ class DeepReadAgent:
         self.store = store or ChromaStore()
         self.checkpoint_store = checkpoint_store or get_checkpoint_store()
         self.llm = llm or get_llm(temperature=0.2)
-        self.config = config or DeepReadConfig()
+        if config is None:
+            self.config = DeepReadConfig(
+                enable_graph_retrieval=get_settings().enable_knowledge_graph
+            )
+        else:
+            self.config = config
         self._collection_name = collection_name or self.store.collection_name
 
     def _build(self, *, book_source: str | None, book_id: str, memory=None, sys_msg: str = "", locale: str | None = None):
@@ -106,7 +111,9 @@ class DeepReadAgent:
         prompts = get_prompts(locale).deepread
 
         # Compose the full system prompt from the locale-specific bundle.
-        full_system_prompt = prompts.system_base + prompts.graph_aware_appendix
+        full_system_prompt = prompts.system_base
+        if config.enable_graph_retrieval:
+            full_system_prompt += prompts.graph_aware_appendix
         if sys_msg:
             full_system_prompt += f"\n\n[System Context Update]\n{sys_msg}"
 
@@ -157,6 +164,8 @@ class DeepReadAgent:
             terms = _extract_graph_terms(search_query)
             if not terms:
                 return {"seed_entities": [], "expanded_entities": [], "chapter_titles": [], "reasoning_paths": []}
+            from graph.neo4j_store import get_neo4j_store
+
             return get_neo4j_store().graph_retrieve_chunks(
                 book_id=book_id,
                 query_terms=terms,

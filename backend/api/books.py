@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from pydantic import BaseModel
 
 from config import get_settings
-from graph.neo4j_store import get_neo4j_store
 from rag.chroma.chroma_store import ChromaStore
 from rag.extracter.epub_extractor import EpubExtractor
 from api.deps import require_member
@@ -76,6 +75,16 @@ def _resolve_public_url(value: str) -> str:
             logger.exception("生成 OSS 签名 URL 失败：%s", value)
             return value
     return value
+
+
+def _knowledge_graph_enabled() -> bool:
+    return get_settings().enable_knowledge_graph
+
+
+def _get_neo4j_store():
+    from graph.neo4j_store import get_neo4j_store
+
+    return get_neo4j_store()
 
 
 @router.get("", response_model=list[BookEntry])
@@ -196,19 +205,21 @@ async def upload_book(
             total_chunks=result.total_chunks,
             cover_path=cover_value,
         )
-        get_neo4j_store().upsert_book(
-            book_id=result.book_id,
-            title=result.book_title,
-            author=result.author,
-            source=source_uri,
-            total_chunks=result.total_chunks,
-            cover_path=cover_value,
-        )
-        graph_docs = store.get_all_documents(filter={"book_id": result.book_id, "owner_user_id": owner})
-        get_neo4j_store().upsert_book_graph(
-            book_id=result.book_id,
-            documents=graph_docs,
-        )
+        if _knowledge_graph_enabled():
+            graph_store = _get_neo4j_store()
+            graph_store.upsert_book(
+                book_id=result.book_id,
+                title=result.book_title,
+                author=result.author,
+                source=source_uri,
+                total_chunks=result.total_chunks,
+                cover_path=cover_value,
+            )
+            graph_docs = store.get_all_documents(filter={"book_id": result.book_id, "owner_user_id": owner})
+            graph_store.upsert_book_graph(
+                book_id=result.book_id,
+                documents=graph_docs,
+            )
 
         return IngestResponse(
             id=result.book_id,
@@ -253,11 +264,12 @@ def delete_book(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"向量库清理失败：{exc}") from exc
 
-    try:
-        get_neo4j_store().delete_book(book_id=book_id)
-    except Exception:
-        # Neo4j 未连接或异常已在内部降级，这里再兜底一次。
-        pass
+    if _knowledge_graph_enabled():
+        try:
+            _get_neo4j_store().delete_book(book_id=book_id)
+        except Exception:
+            # Neo4j 未连接或异常已在内部降级，这里再兜底一次。
+            pass
 
     note_catalog = get_note_catalog()
     note_meta = note_catalog.get_by_book_id(book_id, owner_user_id=owner)
