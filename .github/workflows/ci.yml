@@ -5,6 +5,14 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  ACR_REGISTRY: crpi-vqzgcvtc07egicyr.ap-southeast-1.personal.cr.aliyuncs.com
+  ACR_NAMESPACE: kant_al
+  BACKEND_IMAGE: crpi-vqzgcvtc07egicyr.ap-southeast-1.personal.cr.aliyuncs.com/kant_al/kant-backend
+  FRONTEND_IMAGE: crpi-vqzgcvtc07egicyr.ap-southeast-1.personal.cr.aliyuncs.com/kant_al/kant-frontend
+  K8S_NAMESPACE: kant
 
 jobs:
   # 1. 基础环境与代码规范检查
@@ -122,3 +130,90 @@ jobs:
           else
             echo "All checks passed successfully!"
           fi
+
+  # 6. 构建并推送镜像到阿里云 ACR
+  build-and-push-images:
+    name: Build & Push Images to ACR
+    needs: ci-success
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Alibaba Cloud ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+            ${{ env.BACKEND_IMAGE }}:main-latest
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+            ${{ env.FRONTEND_IMAGE }}:main-latest
+
+  # 7. 部署最新镜像到阿里云 ACK
+  deploy-to-ack:
+    name: Deploy to Alibaba Cloud ACK
+    needs: build-and-push-images
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: kant-ack-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Write ACK kubeconfig
+        env:
+          ACK_KUBECONFIG: ${{ secrets.ACK_KUBECONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          if printf '%s' "$ACK_KUBECONFIG" | grep -q 'apiVersion:'; then
+            printf '%s' "$ACK_KUBECONFIG" > "$HOME/.kube/config"
+          else
+            printf '%s' "$ACK_KUBECONFIG" | base64 -d > "$HOME/.kube/config"
+          fi
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Verify ACK access
+        run: kubectl -n "$K8S_NAMESPACE" get deployment/kant-backend deployment/kant-frontend
+
+      - name: Update deployment images
+        run: |
+          kubectl -n "$K8S_NAMESPACE" set image deployment/kant-backend \
+            backend="${BACKEND_IMAGE}:${GITHUB_SHA}"
+          kubectl -n "$K8S_NAMESPACE" set image deployment/kant-frontend \
+            frontend="${FRONTEND_IMAGE}:${GITHUB_SHA}"
+          kubectl -n "$K8S_NAMESPACE" annotate deployment/kant-backend \
+            kubernetes.io/change-cause="GitHub Actions deploy ${GITHUB_SHA}" --overwrite
+          kubectl -n "$K8S_NAMESPACE" annotate deployment/kant-frontend \
+            kubernetes.io/change-cause="GitHub Actions deploy ${GITHUB_SHA}" --overwrite
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n "$K8S_NAMESPACE" rollout status deployment/kant-backend --timeout=300s
+          kubectl -n "$K8S_NAMESPACE" rollout status deployment/kant-frontend --timeout=300s
