@@ -261,7 +261,8 @@ jobs:
       - name: Install and start backend
         run: |
           python -m pip install -r backend/requirements.txt
-          mkdir -p artifacts/zap
+          mkdir -p artifacts/zap/reports
+          chmod 0777 artifacts/zap/reports
           cd backend
           nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > ../artifacts/zap/backend.log 2>&1 &
           for attempt in {1..60}; do
@@ -273,7 +274,7 @@ jobs:
       - name: Run OWASP ZAP OpenAPI scan
         run: |
           docker run --rm --network host \
-            -v "$PWD/artifacts/zap:/zap/wrk/:rw" \
+            -v "$PWD/artifacts/zap/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-api-scan.py \
             -t http://127.0.0.1:8000/openapi.json \
