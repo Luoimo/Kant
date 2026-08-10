@@ -103,9 +103,6 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
-      - name: Set up Postman CLI
-        uses: postmanlabs/postman-cli-action@v1
-
       - name: Install backend
         run: python -m pip install -r backend/requirements.txt
 
@@ -115,10 +112,10 @@ jobs:
           cd backend
           nohup python -m uvicorn main:app --host 127.0.0.1 --port 8000 > ../artifacts/postman/backend.log 2>&1 &
 
-      - name: Wait for readiness with Postman
+      - name: Wait for readiness
         run: |
           for attempt in {1..60}; do
-            if postman request GET http://127.0.0.1:8000/healthz --timeout 2000 --response-only; then
+            if curl -fsS http://127.0.0.1:8000/healthz; then
               exit 0
             fi
             sleep 2
@@ -126,14 +123,16 @@ jobs:
           exit 1
 
       - name: Run Postman collection
-        run: |
-          postman collection run tests/postman/Kant_API.postman_collection.json \
-            -e tests/postman/local.postman_environment.json \
-            -r cli,json,junit,html \
-            --reporter-json-export artifacts/postman/postman-results.json \
-            --reporter-junit-export artifacts/postman/postman-results.xml \
-            --reporter-html-export artifacts/postman/postman-report.html \
-            --reporter-json-omitAllHeadersAndBody \
+        uses: postmanlabs/postman-cli-action@v1
+        with:
+          command: >-
+            collection run tests/postman/Kant_API.postman_collection.json
+            -e tests/postman/local.postman_environment.json
+            -r cli,json,junit,html
+            --reporter-json-export artifacts/postman/postman-results.json
+            --reporter-junit-export artifacts/postman/postman-results.xml
+            --reporter-html-export artifacts/postman/postman-report.html
+            --reporter-json-omitAllHeadersAndBody
             --reporter-html-omitAllHeadersAndBody
 
       - name: Upload Postman evidence
@@ -157,7 +156,7 @@ jobs:
           docker build -t kant-frontend:evidence frontend
 
       - name: Scan backend image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: kant-backend:evidence
           format: table
@@ -167,7 +166,7 @@ jobs:
           exit-code: "1"
 
       - name: Scan frontend image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: kant-frontend:evidence
           format: table
@@ -177,7 +176,7 @@ jobs:
           exit-code: "1"
 
       - name: Scan Kubernetes IaC with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: k8s
