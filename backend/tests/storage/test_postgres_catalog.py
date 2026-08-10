@@ -61,6 +61,7 @@ def _last_query(cursor: FakeCursor) -> tuple[str, tuple]:
 def test_build_postgres_dsn_from_components() -> None:
     settings = Settings(
         postgres_dsn="",
+        database_url="",
         postgres_host="db.internal",
         postgres_port=5433,
         postgres_user="reader",
