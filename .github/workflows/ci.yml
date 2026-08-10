@@ -7,7 +7,18 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
+  PYTHON_VERSION: "3.12"
+  POSTGRES_DSN: postgresql://postgres:postgres@127.0.0.1:5432/kant
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/kant
+  REDIS_URL: redis://127.0.0.1:6379/0
+  JWT_SECRET_KEY: kant-ci-only-secret-key-with-at-least-32-bytes
+  OPENAI_API_KEY: ci-placeholder-key
+  NOTE_BACKEND: local
+  CHROMA_PERSIST_DIR: /tmp/kant-ci-chroma
   ACR_REGISTRY: crpi-vqzgcvtc07egicyr.ap-southeast-1.personal.cr.aliyuncs.com
   ACR_NAMESPACE: kant_al
   BACKEND_IMAGE: crpi-vqzgcvtc07egicyr.ap-southeast-1.personal.cr.aliyuncs.com/kant_al/kant-backend
@@ -115,23 +126,334 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-  # 5. 汇总节点 (用于 PR 保护分支状态检查)
+  # 5. 静态安全与依赖审计
+  static-analysis:
+    name: SAST & Dependency Audit
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install security scanners
+        run: python -m pip install --upgrade bandit pip-audit semgrep
+
+      - name: Run Bandit SAST
+        run: |
+          mkdir -p artifacts/sast
+          bandit -r backend -x backend/dist -lll -f json -o artifacts/sast/bandit-report.json
+          bandit -r backend -x backend/dist -lll -f txt -o artifacts/sast/bandit-report.txt
+
+      - name: Run Semgrep OWASP/Python rules
+        run: semgrep scan --config p/python --config p/owasp-top-ten --exclude backend/dist --json --output artifacts/sast/semgrep-report.json backend
+
+      - name: Audit Python dependencies
+        run: pip-audit -r backend/requirements.txt --format json --output artifacts/sast/pip-audit-report.json || true
+
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --audit-level=high --json > ../artifacts/sast/npm-audit-report.json
+
+      - name: Upload SAST and dependency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-and-dependency-reports
+          path: artifacts/sast
+
+  # 6. API 集成测试
+  postman-integration:
+    name: Postman API Integration
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kant"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Start test application
+        run: |
+          mkdir -p artifacts/postman
+          cd backend
+          nohup python -m uvicorn main:app --host 127.0.0.1 --port 8000 > ../artifacts/postman/backend.log 2>&1 &
+
+      - name: Wait for readiness
+        run: |
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8000/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Run Postman collection
+        uses: postmanlabs/postman-cli-action@v1
+        with:
+          command: >-
+            collection run tests/postman/Kant_API.postman_collection.json
+            -e tests/postman/local.postman_environment.json
+            -r cli,json,junit,html
+            --reporter-json-export artifacts/postman/postman-results.json
+            --reporter-junit-export artifacts/postman/postman-results.xml
+            --reporter-html-export artifacts/postman/postman-report.html
+            --reporter-json-omitAllHeadersAndBody
+            --reporter-html-omitAllHeadersAndBody
+
+      - name: Upload Postman evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postman-api-integration-reports
+          path: artifacts/postman
+
+  # 7. 容器与基础设施安全
+  container-security:
+    name: Trivy Container & IaC Scan
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build evidence images
+        run: |
+          mkdir -p artifacts/trivy artifacts/container
+          docker build -t kant-backend:evidence -f Dockerfile .
+          docker build -t kant-frontend:evidence frontend
+
+      - name: Scan backend image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: kant-backend:evidence
+          format: table
+          output: artifacts/trivy/trivy-backend.txt
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan frontend image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: kant-frontend:evidence
+          format: table
+          output: artifacts/trivy/trivy-frontend.txt
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan Kubernetes IaC with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: k8s
+          format: table
+          output: artifacts/trivy/trivy-kubernetes-iac.txt
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Publish Trivy release-gate summary
+        run: |
+          {
+            echo "## Trivy release gate: PASS"
+            echo
+            echo "| Scope | Gate | Result |"
+            echo "| --- | --- | --- |"
+            echo "| Backend container | Fixable HIGH / CRITICAL = 0 | PASS |"
+            echo "| Frontend container | Fixable HIGH / CRITICAL = 0 | PASS |"
+            echo "| Kubernetes IaC | HIGH / CRITICAL = 0 | PASS |"
+            echo
+            echo "Container scans use \`ignore-unfixed: true\`; vulnerabilities without an upstream fix remain documented by dependency audit."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture container interaction evidence
+        run: |
+          docker image inspect kant-backend:evidence > artifacts/container/backend-image-inspect.json
+          docker image inspect kant-frontend:evidence > artifacts/container/frontend-image-inspect.json
+          docker image history --no-trunc kant-backend:evidence > artifacts/container/backend-image-history.txt
+          docker run -d --name kant-frontend-evidence -p 18080:8080 kant-frontend:evidence
+          sleep 3
+          curl -fsS http://127.0.0.1:18080/healthz > artifacts/container/frontend-health.txt
+          docker inspect kant-frontend-evidence > artifacts/container/frontend-container-inspect.json
+          docker logs kant-frontend-evidence > artifacts/container/frontend-container.log 2>&1
+          docker ps --filter name=kant-frontend-evidence > artifacts/container/docker-ps.txt
+          docker rm -f kant-frontend-evidence
+
+      - name: Upload container and Trivy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-and-container-reports
+          path: |
+            artifacts/trivy
+            artifacts/container
+
+  # 8. 动态应用安全测试
+  zap-dast:
+    name: OWASP ZAP DAST
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kant"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install and start backend
+        run: |
+          python -m pip install -r backend/requirements.txt
+          mkdir -p artifacts/zap/reports
+          chmod 0777 artifacts/zap/reports
+          cd backend
+          nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > ../artifacts/zap/backend.log 2>&1 &
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8000/healthz; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Run OWASP ZAP OpenAPI scan
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/artifacts/zap/reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py \
+            -t http://127.0.0.1:8000/openapi.json \
+            -f openapi \
+            -r zap-report.html \
+            -J zap-report.json \
+            -w zap-report.md \
+            -I
+
+      - name: Upload ZAP evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-reports
+          path: artifacts/zap
+
+  # 9. 基础设施与版本控制审计
+  compliance-evidence:
+    name: IaC & Git Audit Trail
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Capture version-control and IaC evidence
+        run: |
+          mkdir -p artifacts/compliance/k8s
+          git log --date=iso-strict --pretty=format:'%h | %ad | %an | %s' --all > artifacts/compliance/git-audit-trail.txt
+          git shortlog -sne --all > artifacts/compliance/git-contribution-summary.txt
+          git log --stat --oneline --all > artifacts/compliance/git-change-statistics.txt
+          cp k8s/*.yaml artifacts/compliance/k8s/
+
+      - name: Upload compliance-as-code evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac-and-git-audit-evidence
+          path: artifacts/compliance
+
+  # 10. 汇总质量与安全门禁 (用于 PR 保护分支状态检查)
   ci-success:
     name: CI Pipeline Passed
-    needs: [backend-core-tests, backend-security-tests, frontend-build]
+    needs:
+      - prepare-and-lint
+      - backend-core-tests
+      - backend-security-tests
+      - frontend-build
+      - static-analysis
+      - postman-integration
+      - container-security
+      - zap-dast
+      - compliance-evidence
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check build status
         run: |
-          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ]; then
+          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ] || \
+             [ "${{ contains(needs.*.result, 'cancelled') }}" = "true" ] || \
+             [ "${{ contains(needs.*.result, 'skipped') }}" = "true" ]; then
             echo "CI Pipeline Failed!"
             exit 1
           else
             echo "All checks passed successfully!"
           fi
 
-  # 6. 构建并推送镜像到阿里云 ACR
+  # 11. 构建并推送镜像到阿里云 ACR
   build-and-push-images:
     name: Build & Push Images to ACR
     needs: ci-success
@@ -174,7 +496,7 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
             ${{ env.FRONTEND_IMAGE }}:main-latest
 
-  # 7. 部署最新镜像到阿里云 ACK
+  # 12. 部署最新镜像到阿里云 ACK
   deploy-to-ack:
     name: Deploy to Alibaba Cloud ACK
     needs: build-and-push-images
