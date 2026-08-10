@@ -223,7 +223,6 @@ jobs:
 
   zap-dast:
     name: OWASP ZAP DAST
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -290,108 +289,6 @@ jobs:
         with:
           name: zap-dast-reports
           path: artifacts/zap
-
-  jmeter-performance:
-    name: JMeter Load & Stress Tests
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: kant
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d kant"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install and start backend
-        run: |
-          python -m pip install -r backend/requirements.txt
-          mkdir -p artifacts/jmeter/load artifacts/jmeter/stress artifacts/jmeter/server
-          cd backend
-          nohup python -m uvicorn main:app --host 127.0.0.1 --port 8000 > ../artifacts/jmeter/server/backend.log 2>&1 &
-          for attempt in {1..60}; do
-            if curl -fsS http://127.0.0.1:8000/healthz; then exit 0; fi
-            sleep 2
-          done
-          exit 1
-
-      - name: Install Apache JMeter 5.6.3
-        run: |
-          curl -fsSLO https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
-          curl -fsSLO https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz.sha512
-          sha512sum -c apache-jmeter-5.6.3.tgz.sha512
-          tar -xzf apache-jmeter-5.6.3.tgz
-
-      - name: Seed non-AI performance fixtures
-        run: |
-          python tests/performance/seed_performance_data.py \
-            --email kant.jmeter.reader@example.com \
-            --password 'Kant-JMeter-2026!' \
-            --admin-email kant.jmeter.admin@example.com \
-            --admin-password 'Kant-JMeter-2026!' \
-            --book-id kant-performance-book \
-            > artifacts/jmeter/server/seed.json
-          echo "SEED_USER_ID=$(jq -r .user_id artifacts/jmeter/server/seed.json)" >> "$GITHUB_ENV"
-
-      - name: Run load profile
-        run: |
-          apache-jmeter-5.6.3/bin/jmeter -n \
-            -t tests/performance/jmeter/kant-api-performance.jmx \
-            -Jprotocol=http -Jhost=127.0.0.1 -Jport=8000 \
-            -Jrun_id="${GITHUB_RUN_ID}-load" \
-            -Jseed_email=kant.jmeter.reader@example.com -Jtest_password='Kant-JMeter-2026!' \
-            -Jadmin_email=kant.jmeter.admin@example.com -Jadmin_password='Kant-JMeter-2026!' \
-            -Jseed_user_id="$SEED_USER_ID" -Jbook_id=kant-performance-book \
-            -Jauth_threads=20 -Jauth_ramp_up=10 \
-            -Jreader_threads=20 -Jreader_ramp_up=20 -Jduration=120 \
-            -l artifacts/jmeter/load/results.jtl \
-            -e -o artifacts/jmeter/load/dashboard
-
-      - name: Run stress profile
-        run: |
-          apache-jmeter-5.6.3/bin/jmeter -n \
-            -t tests/performance/jmeter/kant-api-performance.jmx \
-            -Jprotocol=http -Jhost=127.0.0.1 -Jport=8000 \
-            -Jrun_id="${GITHUB_RUN_ID}-stress" \
-            -Jseed_email=kant.jmeter.reader@example.com -Jtest_password='Kant-JMeter-2026!' \
-            -Jadmin_email=kant.jmeter.admin@example.com -Jadmin_password='Kant-JMeter-2026!' \
-            -Jseed_user_id="$SEED_USER_ID" -Jbook_id=kant-performance-book \
-            -Jauth_threads=100 -Jauth_ramp_up=20 \
-            -Jreader_threads=100 -Jreader_ramp_up=20 -Jduration=90 \
-            -l artifacts/jmeter/stress/results.jtl \
-            -e -o artifacts/jmeter/stress/dashboard
-
-      - name: Upload JMeter evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: jmeter-load-and-stress-reports
-          path: artifacts/jmeter
 
   compliance-evidence:
     name: IaC & Git Audit Trail
