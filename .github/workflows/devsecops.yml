@@ -1,0 +1,416 @@
+name: Kant DevSecOps Evidence
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  POSTGRES_DSN: postgresql://postgres:postgres@127.0.0.1:5432/kant
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/kant
+  REDIS_URL: redis://127.0.0.1:6379/0
+  JWT_SECRET_KEY: kant-ci-only-secret-key-with-at-least-32-bytes
+  OPENAI_API_KEY: ci-placeholder-key
+  NOTE_BACKEND: local
+  CHROMA_PERSIST_DIR: /tmp/kant-ci-chroma
+
+jobs:
+  static-analysis:
+    name: SAST & Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install security scanners
+        run: python -m pip install --upgrade bandit pip-audit semgrep
+
+      - name: Run Bandit SAST
+        run: |
+          mkdir -p artifacts/sast
+          bandit -r backend -x backend/dist -lll -f json -o artifacts/sast/bandit-report.json
+          bandit -r backend -x backend/dist -lll -f txt -o artifacts/sast/bandit-report.txt
+
+      - name: Run Semgrep OWASP/Python rules
+        run: semgrep scan --config p/python --config p/owasp-top-ten --exclude backend/dist --json --output artifacts/sast/semgrep-report.json backend
+
+      - name: Audit Python dependencies
+        run: pip-audit -r backend/requirements.txt --format json --output artifacts/sast/pip-audit-report.json || true
+
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --audit-level=high --json > ../artifacts/sast/npm-audit-report.json
+
+      - name: Upload SAST and dependency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-and-dependency-reports
+          path: artifacts/sast
+
+  postman-integration:
+    name: Postman API Integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kant"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Set up Postman CLI
+        uses: postmanlabs/postman-cli-action@v1
+
+      - name: Install backend
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Start test application
+        run: |
+          mkdir -p artifacts/postman
+          cd backend
+          nohup python -m uvicorn main:app --host 127.0.0.1 --port 8000 > ../artifacts/postman/backend.log 2>&1 &
+
+      - name: Wait for readiness with Postman
+        run: |
+          for attempt in {1..60}; do
+            if postman request GET http://127.0.0.1:8000/healthz --timeout 2000 --response-only; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Run Postman collection
+        run: |
+          postman collection run tests/postman/Kant_API.postman_collection.json \
+            -e tests/postman/local.postman_environment.json \
+            -r cli,json,junit,html \
+            --reporter-json-export artifacts/postman/postman-results.json \
+            --reporter-junit-export artifacts/postman/postman-results.xml \
+            --reporter-html-export artifacts/postman/postman-report.html \
+            --reporter-json-omitAllHeadersAndBody \
+            --reporter-html-omitAllHeadersAndBody
+
+      - name: Upload Postman evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postman-api-integration-reports
+          path: artifacts/postman
+
+  container-security:
+    name: Trivy Container & IaC Scan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build evidence images
+        run: |
+          mkdir -p artifacts/trivy artifacts/container
+          docker build -t kant-backend:evidence -f Dockerfile .
+          docker build -t kant-frontend:evidence frontend
+
+      - name: Scan backend image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: kant-backend:evidence
+          format: table
+          output: artifacts/trivy/trivy-backend.txt
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan frontend image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: kant-frontend:evidence
+          format: table
+          output: artifacts/trivy/trivy-frontend.txt
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan Kubernetes IaC with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: k8s
+          format: table
+          output: artifacts/trivy/trivy-kubernetes-iac.txt
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Publish Trivy release-gate summary
+        run: |
+          {
+            echo "## Trivy release gate: PASS"
+            echo
+            echo "| Scope | Gate | Result |"
+            echo "| --- | --- | --- |"
+            echo "| Backend container | Fixable HIGH / CRITICAL = 0 | PASS |"
+            echo "| Frontend container | Fixable HIGH / CRITICAL = 0 | PASS |"
+            echo "| Kubernetes IaC | HIGH / CRITICAL = 0 | PASS |"
+            echo
+            echo "Container scans use \`ignore-unfixed: true\`; vulnerabilities without an upstream fix remain documented by dependency audit."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture container interaction evidence
+        run: |
+          docker image inspect kant-backend:evidence > artifacts/container/backend-image-inspect.json
+          docker image inspect kant-frontend:evidence > artifacts/container/frontend-image-inspect.json
+          docker image history --no-trunc kant-backend:evidence > artifacts/container/backend-image-history.txt
+          docker run -d --name kant-frontend-evidence -p 18080:8080 kant-frontend:evidence
+          sleep 3
+          curl -fsS http://127.0.0.1:18080/healthz > artifacts/container/frontend-health.txt
+          docker inspect kant-frontend-evidence > artifacts/container/frontend-container-inspect.json
+          docker logs kant-frontend-evidence > artifacts/container/frontend-container.log 2>&1
+          docker ps --filter name=kant-frontend-evidence > artifacts/container/docker-ps.txt
+          docker rm -f kant-frontend-evidence
+
+      - name: Upload container and Trivy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-and-container-reports
+          path: |
+            artifacts/trivy
+            artifacts/container
+
+  zap-dast:
+    name: OWASP ZAP DAST
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kant"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install and start backend
+        run: |
+          python -m pip install -r backend/requirements.txt
+          mkdir -p artifacts/zap
+          cd backend
+          nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > ../artifacts/zap/backend.log 2>&1 &
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8000/healthz; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Run OWASP ZAP OpenAPI scan
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/artifacts/zap:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py \
+            -t http://127.0.0.1:8000/openapi.json \
+            -f openapi \
+            -r zap-report.html \
+            -J zap-report.json \
+            -w zap-report.md \
+            -I
+
+      - name: Upload ZAP evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-reports
+          path: artifacts/zap
+
+  jmeter-performance:
+    name: JMeter Load & Stress Tests
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kant"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install and start backend
+        run: |
+          python -m pip install -r backend/requirements.txt
+          mkdir -p artifacts/jmeter/load artifacts/jmeter/stress artifacts/jmeter/server
+          cd backend
+          nohup python -m uvicorn main:app --host 127.0.0.1 --port 8000 > ../artifacts/jmeter/server/backend.log 2>&1 &
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8000/healthz; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Install Apache JMeter 5.6.3
+        run: |
+          curl -fsSLO https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
+          curl -fsSLO https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz.sha512
+          sha512sum -c apache-jmeter-5.6.3.tgz.sha512
+          tar -xzf apache-jmeter-5.6.3.tgz
+
+      - name: Seed non-AI performance fixtures
+        run: |
+          python tests/performance/seed_performance_data.py \
+            --email kant.jmeter.reader@example.com \
+            --password 'Kant-JMeter-2026!' \
+            --admin-email kant.jmeter.admin@example.com \
+            --admin-password 'Kant-JMeter-2026!' \
+            --book-id kant-performance-book \
+            > artifacts/jmeter/server/seed.json
+          echo "SEED_USER_ID=$(jq -r .user_id artifacts/jmeter/server/seed.json)" >> "$GITHUB_ENV"
+
+      - name: Run load profile
+        run: |
+          apache-jmeter-5.6.3/bin/jmeter -n \
+            -t tests/performance/jmeter/kant-api-performance.jmx \
+            -Jprotocol=http -Jhost=127.0.0.1 -Jport=8000 \
+            -Jrun_id="${GITHUB_RUN_ID}-load" \
+            -Jseed_email=kant.jmeter.reader@example.com -Jtest_password='Kant-JMeter-2026!' \
+            -Jadmin_email=kant.jmeter.admin@example.com -Jadmin_password='Kant-JMeter-2026!' \
+            -Jseed_user_id="$SEED_USER_ID" -Jbook_id=kant-performance-book \
+            -Jauth_threads=20 -Jauth_ramp_up=10 \
+            -Jreader_threads=20 -Jreader_ramp_up=20 -Jduration=120 \
+            -l artifacts/jmeter/load/results.jtl \
+            -e -o artifacts/jmeter/load/dashboard
+
+      - name: Run stress profile
+        run: |
+          apache-jmeter-5.6.3/bin/jmeter -n \
+            -t tests/performance/jmeter/kant-api-performance.jmx \
+            -Jprotocol=http -Jhost=127.0.0.1 -Jport=8000 \
+            -Jrun_id="${GITHUB_RUN_ID}-stress" \
+            -Jseed_email=kant.jmeter.reader@example.com -Jtest_password='Kant-JMeter-2026!' \
+            -Jadmin_email=kant.jmeter.admin@example.com -Jadmin_password='Kant-JMeter-2026!' \
+            -Jseed_user_id="$SEED_USER_ID" -Jbook_id=kant-performance-book \
+            -Jauth_threads=100 -Jauth_ramp_up=20 \
+            -Jreader_threads=100 -Jreader_ramp_up=20 -Jduration=90 \
+            -l artifacts/jmeter/stress/results.jtl \
+            -e -o artifacts/jmeter/stress/dashboard
+
+      - name: Upload JMeter evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmeter-load-and-stress-reports
+          path: artifacts/jmeter
+
+  compliance-evidence:
+    name: IaC & Git Audit Trail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Capture version-control and IaC evidence
+        run: |
+          mkdir -p artifacts/compliance/k8s
+          git log --date=iso-strict --pretty=format:'%h | %ad | %an | %s' --all > artifacts/compliance/git-audit-trail.txt
+          git shortlog -sne --all > artifacts/compliance/git-contribution-summary.txt
+          git log --stat --oneline --all > artifacts/compliance/git-change-statistics.txt
+          cp k8s/*.yaml artifacts/compliance/k8s/
+
+      - name: Upload compliance-as-code evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac-and-git-audit-evidence
+          path: artifacts/compliance

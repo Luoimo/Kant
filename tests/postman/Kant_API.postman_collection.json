@@ -1,0 +1,231 @@
+{
+  "info": {
+    "_postman_id": "d1c81ccb-85cb-4f86-81b8-15f21fa7d927",
+    "name": "Kant API - Integration and Security Regression",
+    "description": "Reproducible API evidence for health, OpenAPI, CORS, authentication, authorization, token refresh and logout.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get('test_email')) {",
+          "  pm.collectionVariables.set('test_email', `kant.postman.${Date.now()}@example.com`);",
+          "}",
+          "if (!pm.collectionVariables.get('test_password')) {",
+          "  pm.collectionVariables.set('test_password', 'Kant-Postman-2026!');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {"key": "base_url", "value": "http://127.0.0.1:8000", "type": "string"},
+    {"key": "test_email", "value": "", "type": "string"},
+    {"key": "test_password", "value": "", "type": "string"},
+    {"key": "access_token", "value": "", "type": "string"},
+    {"key": "refresh_token", "value": "", "type": "string"}
+  ],
+  "item": [
+    {
+      "name": "Smoke and Contract",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/healthz"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('service reports ok', () => pm.expect(pm.response.json().status).to.eql('ok'));",
+              "pm.test('security headers are present', () => {",
+              "  pm.expect(pm.response.headers.get('X-Content-Type-Options')).to.eql('nosniff');",
+              "  pm.expect(pm.response.headers.get('X-Frame-Options')).to.eql('DENY');",
+              "  pm.expect(pm.response.headers.get('Content-Security-Policy')).to.include(\"default-src 'none'\");",
+              "});",
+              "pm.test('response time is below 1000 ms', () => pm.expect(pm.response.responseTime).to.be.below(1000));"
+            ]}
+          }]
+        },
+        {
+          "name": "OpenAPI schema",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/openapi.json"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('schema identifies Kant', () => pm.expect(pm.response.json().info.title).to.eql('Kant Reading Agent'));",
+              "pm.test('schema exposes API paths', () => pm.expect(Object.keys(pm.response.json().paths).length).to.be.above(5));"
+            ]}
+          }]
+        },
+        {
+          "name": "CORS preflight",
+          "request": {
+            "method": "OPTIONS",
+            "header": [
+              {"key": "Origin", "value": "http://localhost:5173"},
+              {"key": "Access-Control-Request-Method", "value": "GET"}
+            ],
+            "url": "{{base_url}}/books"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('preflight is accepted', () => pm.response.to.have.status(200));",
+              "pm.test('allowed origin is explicit', () => pm.expect(pm.response.headers.get('Access-Control-Allow-Origin')).to.eql('http://localhost:5173'));"
+            ]}
+          }]
+        },
+        {
+          "name": "Weak password is rejected",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"email\": \"weak.{{$timestamp}}@example.com\",\n  \"password\": \"short\"\n}"},
+            "url": "{{base_url}}/auth/register"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('weak password is rejected with 422', () => pm.response.to.have.status(422));",
+              "pm.test('error is explicit', () => pm.expect(pm.response.json().detail).to.eql('password too short'));"
+            ]}
+          }]
+        },
+        {
+          "name": "Protected book list rejects anonymous request",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/books"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('anonymous request is rejected', () => pm.response.to.have.status(401));",
+              "pm.test('missing token is reported', () => pm.expect(pm.response.json().detail).to.eql('missing token'));"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "Authenticated Workflow",
+      "description": "Requires PostgreSQL and Redis. The CI workflow provisions both services.",
+      "item": [
+        {
+          "name": "Register member",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"email\": \"{{test_email}}\",\n  \"password\": \"{{test_password}}\"\n}"},
+            "url": "{{base_url}}/auth/register"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('member is registered', () => pm.response.to.have.status(200));",
+              "pm.test('member role is returned', () => pm.expect(pm.response.json().role).to.eql('member'));",
+              "pm.collectionVariables.set('user_id', pm.response.json().user_id);"
+            ]}
+          }]
+        },
+        {
+          "name": "Login member",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"email\": \"{{test_email}}\",\n  \"password\": \"{{test_password}}\"\n}"},
+            "url": "{{base_url}}/auth/login"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('login succeeds', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('access and refresh tokens are returned', () => { pm.expect(body.access_token).to.be.a('string'); pm.expect(body.refresh_token).to.be.a('string'); });",
+              "pm.collectionVariables.set('access_token', body.access_token);",
+              "pm.collectionVariables.set('refresh_token', body.refresh_token);"
+            ]}
+          }]
+        },
+        {
+          "name": "List own books",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}", "type": "text"}],
+            "url": "{{base_url}}/books"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('member can list own books', () => pm.response.to.have.status(200));",
+              "pm.test('response is a list', () => pm.expect(pm.response.json()).to.be.an('array'));"
+            ]}
+          }]
+        },
+        {
+          "name": "Member cannot access admin API",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}", "type": "text"}],
+            "url": "{{base_url}}/api/admin/users"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('role boundary is enforced', () => pm.response.to.have.status(403));",
+              "pm.test('admin role is required', () => pm.expect(pm.response.json().detail).to.eql('admin required'));"
+            ]}
+          }]
+        },
+        {
+          "name": "Rotate refresh token",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"},
+            "url": "{{base_url}}/auth/refresh"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('refresh succeeds', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('tokens are rotated', () => pm.expect(body.refresh_token).to.not.eql(pm.collectionVariables.get('refresh_token')));",
+              "pm.collectionVariables.set('access_token', body.access_token);",
+              "pm.collectionVariables.set('refresh_token', body.refresh_token);"
+            ]}
+          }]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"},
+            "url": "{{base_url}}/auth/logout"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"type": "text/javascript", "exec": [
+              "pm.test('logout succeeds', () => pm.response.to.have.status(200));",
+              "pm.test('logout is acknowledged', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+            ]}
+          }]
+        }
+      ]
+    }
+  ]
+}

@@ -36,7 +36,7 @@ def _sanitize_collection_name(title: str) -> str:
     - 无论中英文书名都合法
     - 同一书名始终映射到同一 collection（稳定唯一）
     """
-    hash16 = hashlib.md5(title.encode("utf-8")).hexdigest()[:16]
+    hash16 = hashlib.md5(title.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return f"book_{hash16}"
 
 

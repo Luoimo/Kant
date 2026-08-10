@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -42,3 +43,14 @@ def test_auth_router_mounts():
     app.include_router(auth_router)
     paths = {route.path for route in app.routes}
     assert "/auth/login" in paths
+
+
+@pytest.mark.parametrize("path", ["/auth/refresh", "/auth/logout", "/auth/logout-all"])
+def test_refresh_endpoints_reject_malformed_tokens(path: str):
+    app = FastAPI()
+    app.include_router(auth_router)
+
+    response = TestClient(app).post(path, json={"refresh_token": "not-a-jwt"})
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "invalid refresh token"}

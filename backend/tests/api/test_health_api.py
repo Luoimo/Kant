@@ -13,6 +13,21 @@ def test_healthz_returns_ok():
     assert response.json() == {"status": "ok"}
 
 
+def test_responses_include_security_headers():
+    response = TestClient(app).get("/healthz")
+
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["cross-origin-resource-policy"] == "same-origin"
+    assert response.headers["permissions-policy"] == (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    assert response.headers["content-security-policy"] == (
+        "default-src 'none'; frame-ancestors 'none'"
+    )
+
+
 def test_settings_parses_cors_allow_origins():
     settings = Settings(
         cors_allow_origins="https://kant.example.com, https://api.kant.example.com"

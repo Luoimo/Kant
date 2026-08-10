@@ -17,10 +17,29 @@ spec:
       labels:
         app: kant-backend
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
           image: crpi-vqzgcvtc07egicyr.ap-southeast-1.personal.cr.aliyuncs.com/kant_al/kant-backend:v1-amd64
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 10001
+            runAsNonRoot: true
+            runAsUser: 10001
+          volumeMounts:
+            - name: runtime-data
+              mountPath: /app/backend/data
+            - name: tmp
+              mountPath: /tmp
           ports:
             - name: http
               containerPort: 8000
@@ -52,6 +71,11 @@ spec:
             limits:
               cpu: "2"
               memory: "2Gi"
+      volumes:
+        - name: runtime-data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

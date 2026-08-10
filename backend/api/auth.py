@@ -31,6 +31,16 @@ class LogoutRequest(BaseModel):
     refresh_token: str
 
 
+def _decode_refresh_token(token: str) -> dict:
+    try:
+        payload = decode_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="invalid refresh token") from exc
+    if payload.get("typ") != "refresh":
+        raise HTTPException(status_code=401, detail="invalid token type")
+    return payload
+
+
 @router.post("/register")
 def register(req: RegisterRequest) -> dict:
     if len(req.password) < 8:
@@ -79,9 +89,7 @@ def login(req: LoginRequest) -> dict:
 
 @router.post("/refresh")
 def refresh(req: RefreshRequest) -> dict:
-    payload = decode_token(req.refresh_token)
-    if payload.get("typ") != "refresh":
-        raise HTTPException(status_code=401, detail="invalid token type")
+    payload = _decode_refresh_token(req.refresh_token)
 
     user_id = payload["sub"]
     role = payload["role"]
@@ -103,17 +111,13 @@ def refresh(req: RefreshRequest) -> dict:
 
 @router.post("/logout")
 def logout(req: LogoutRequest) -> dict:
-    payload = decode_token(req.refresh_token)
-    if payload.get("typ") != "refresh":
-        raise HTTPException(status_code=401, detail="invalid token type")
+    payload = _decode_refresh_token(req.refresh_token)
     RefreshStore().revoke(user_id=payload["sub"], jti=payload["jti"])
     return {"status": "ok"}
 
 
 @router.post("/logout-all")
 def logout_all(req: RefreshRequest) -> dict:
-    payload = decode_token(req.refresh_token)
-    if payload.get("typ") != "refresh":
-        raise HTTPException(status_code=401, detail="invalid token type")
+    payload = _decode_refresh_token(req.refresh_token)
     RefreshStore().revoke_all(user_id=payload["sub"])
     return {"status": "ok"}
