@@ -17,6 +17,8 @@ spec:
       labels:
         app: kant-backend
     spec:
+      imagePullSecrets:
+        - name: aliyun-acr
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

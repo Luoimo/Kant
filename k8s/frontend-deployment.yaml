@@ -17,6 +17,8 @@ spec:
       labels:
         app: kant-frontend
     spec:
+      imagePullSecrets:
+        - name: aliyun-acr
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -38,6 +40,10 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /run
           ports:
             - name: http
               containerPort: 8080
@@ -66,6 +72,10 @@ spec:
               memory: "512Mi"
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: run
           emptyDir: {}
 ---
 apiVersion: v1

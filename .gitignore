@@ -78,3 +78,7 @@ k8s/secret.prod.yaml
 
 # 本地桌面数据目录（打包运行时生成）
 .KantData/
+
+Kant_Project_Materials_20260823.tar.gz
+Kant_Project_Materials_20260823.tar.gz.sha256
+Kant_Project_Materials_20260823_CONTENTS.md
