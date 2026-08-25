@@ -141,12 +141,15 @@ def run_lakera_guard_check(user_input: str) -> InputSafetyResult:
     调用 Lakera Guard API 进行企业级 AI 安全检测。
     如果未配置 API Key 或网络请求失败，则回退到本地的基于正则的输入过滤。
     """
-    import sys
     settings = get_settings()
     api_key = settings.lakera_guard_api_key
-    
-    print(f"Lakera API key loaded: {bool(api_key)}")
-    sys.stdout.flush()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        local_result = run_input_safety_check(user_input)
+
+    if not local_result.allowed:
+        return local_result
     
     if not api_key:
         logger.info("未配置 Lakera Guard API Key，回退到本地正则过滤规则。")
@@ -166,12 +169,7 @@ def run_lakera_guard_check(user_input: str) -> InputSafetyResult:
         # Lakera Guard v2 返回结构中，flagged 直接在根节点
         is_flagged = data.get("flagged", False)
         
-        print(f"Lakera API response: {data}, flagged: {is_flagged}")
-        sys.stdout.flush()
-        
         if is_flagged:
-            print(f"Lakera Guard 拦截了恶意输入: {user_input[:50]}...")
-            sys.stdout.flush()
             return InputSafetyResult(
                 allowed=False,
                 reason="Lakera Guard 拦截：检测到高危指令、Prompt 注入攻击或越狱尝试。",
@@ -179,15 +177,8 @@ def run_lakera_guard_check(user_input: str) -> InputSafetyResult:
                 sanitized_text=user_input,
             )
         
-        return InputSafetyResult(
-            allowed=True,
-            reason="Lakera Guard 检查通过。",
-            categories=[],
-            sanitized_text=user_input,
-        )
+        return local_result
         
     except Exception as e:
-        print(f"Lakera Guard 请求失败或超时: {e}，正在回退到本地过滤规则。")
-        sys.stdout.flush()
-        return run_input_safety_check(user_input)
-
+        logger.warning("Lakera Guard 请求失败或超时：%s，使用本地过滤结果。", e)
+        return local_result

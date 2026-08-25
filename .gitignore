@@ -82,3 +82,8 @@ k8s/secret.prod.yaml
 Kant_Project_Materials_20260823.tar.gz
 Kant_Project_Materials_20260823.tar.gz.sha256
 Kant_Project_Materials_20260823_CONTENTS.md
+AGENTIC_TESTING_EVIDENCE.md
+
+artifacts/
+
+test-evidence-dashboard.html

@@ -232,6 +232,29 @@ def test_streaming_chat_covers_router_deepread_critic_note_memory_and_followup(t
     assert app_state.mem0.saved
 
 
+def test_streaming_chat_reports_agent_failure_without_side_effects(test_client):
+    async def failing_stream(**kwargs):
+        _ = kwargs
+        raise RuntimeError("retrieval service unavailable")
+        yield
+
+    app_state = test_client.app.state
+    app_state.agent.astream_events = failing_stream
+
+    with test_client.stream(
+        "POST",
+        "/api/user/chat/stream",
+        json={"query": "Explain this paragraph.", "book_id": "book-1", "conversation_id": "conv-1", "locale": "en-US"},
+    ) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert '"type": "error"' in body
+    assert "retrieval service unavailable" in body
+    assert app_state.note_agent.processed == []
+    assert app_state.mem0.saved == []
+
+
 def test_chat_history_endpoints_delegate_to_agent_contract(test_client):
     response = test_client.get(
         "/chat/history",

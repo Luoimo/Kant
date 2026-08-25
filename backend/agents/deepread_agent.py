@@ -369,6 +369,7 @@ class DeepReadAgent:
         selected_text: str | None = None,
         current_chapter: str | None = None,
         locale: str | None = None,
+        include_trace_details: bool = False,
     ) -> AsyncGenerator[tuple[str, object], None]:
         """Async generator yielding (event_type, data) for SSE streaming."""
         logger.info("stream user=%r query=%r source=%r locale=%r", user_id, query, book_source, locale)
@@ -402,7 +403,13 @@ class DeepReadAgent:
             ):
                 etype = event["event"]
                 if etype == "on_tool_start":
-                    yield "tool", event.get("name", "tool")
+                    tool_name = event.get("name", "tool")
+                    yield "tool", tool_name
+                    if include_trace_details:
+                        yield "tool_trace", {
+                            "name": tool_name,
+                            "input": event.get("data", {}).get("input"),
+                        }
                 elif etype == "on_chat_model_stream":
                     chunk = event["data"]["chunk"]
                     # Skip tool-call chunks; only forward plain text
@@ -419,10 +426,13 @@ class DeepReadAgent:
                                     yield "token", text
 
         citations = build_citations(current_docs)
-        yield "done", {
+        completion = {
             "citations": [c.__dict__ for c in citations],
             "docs_count": len(current_docs),
         }
+        if include_trace_details:
+            completion["retrieved_contexts"] = [doc.page_content for doc in current_docs]
+        yield "done", completion
 
 
 __all__ = ["DeepReadAgent", "DeepReadResult", "DeepReadConfig"]

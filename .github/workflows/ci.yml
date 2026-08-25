@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_live_agent_evidence:
+        description: Run paid live Agent, Ragas, Memory, and Promptfoo evidence jobs
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: kant-ci-${{ github.ref }}
@@ -74,7 +79,7 @@ jobs:
       - name: Run Core Tests
         env:
           PYTHONPATH: .
-        run: pytest tests/ --ignore=tests/security --cov=. --cov-report=xml --junitxml=core-results.xml
+        run: pytest tests/ --cov=. --cov-config=.coveragerc --cov-fail-under=80 --cov-report=xml --cov-report=html:htmlcov --junitxml=core-results.xml
       - name: Upload Results
         uses: actions/upload-artifact@v4
         if: always()
@@ -83,6 +88,7 @@ jobs:
           path: |
             backend/core-results.xml
             backend/coverage.xml
+            backend/htmlcov/
 
   # 3. AI 安全测试 (MLSecOps)
   backend-security-tests:
@@ -135,6 +141,145 @@ jobs:
         run: npm ci || npm install
       - name: Build frontend
         run: npm run build
+
+  frontend-e2e:
+    name: Playwright Agent E2E
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend and Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run Agent browser journeys
+        run: npm run test:e2e
+      - name: Upload Playwright evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-agent-e2e
+          path: artifacts/agentic-ai/playwright
+
+  agentic-deterministic-evidence:
+    name: Agentic Deterministic Evidence
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend test dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-cov
+      - name: Run focused Agentic and security suites
+        env:
+          PYTHONPATH: .
+          LAKERA_GUARD_API_KEY: ""
+        run: >-
+          pytest tests/agentic tests/agents tests/security
+          --junitxml=agentic-results.xml
+          --cov=agents --cov=security
+          --cov-report=xml:agentic-coverage.xml
+      - name: Upload deterministic Agent evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-deterministic-evidence
+          path: |
+            backend/agentic-results.xml
+            backend/agentic-coverage.xml
+            backend/tests/agentic/cases.json
+
+  live-agent-evidence:
+    name: Live Agent, Ragas & Memory Evidence
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_agent_evidence
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: https://api.openai.com/v1
+      OPENAI_MODEL: gpt-4o-mini
+      OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+      CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
+      CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
+      CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
+      LANGCHAIN_TRACING_V2: "false"
+      RAGAS_DO_NOT_TRACK: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend and evaluation dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install ragas datasets pandas
+      - name: Validate required secrets
+        run: |
+          test -n "$OPENAI_API_KEY"
+          test -n "$CHROMA_API_KEY"
+          test -n "$CHROMA_TENANT"
+          test -n "$CHROMA_DATABASE"
+      - name: Run live Agent and Ragas evaluation
+        run: python tests/agentic/run_live_evaluation.py --repeat-count 3
+      - name: Run live Memory isolation evaluation
+        run: python tests/agentic/run_live_memory_evaluation.py
+      - name: Upload live Agent evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-agent-evidence
+          path: artifacts/agentic-ai
+
+  agent-red-team:
+    name: Promptfoo Agent Red Team
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_agent_evidence
+    needs: prepare-and-lint
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run Promptfoo security evaluation
+        working-directory: backend
+        run: |
+          mkdir -p ../artifacts/agentic-ai/promptfoo
+          npx -y promptfoo@0.122.0 eval \
+            -c tests/prompts/promptfooconfig.yaml \
+            -j 2 --no-share --no-cache \
+            -o ../artifacts/agentic-ai/promptfoo/promptfoo-report.html \
+            -o ../artifacts/agentic-ai/promptfoo/promptfoo-results.json \
+            -o ../artifacts/agentic-ai/promptfoo/promptfoo-results.junit.xml
+      - name: Upload Promptfoo evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-agent-red-team
+          path: artifacts/agentic-ai/promptfoo
 
   # 5. 静态安全与依赖审计
   static-analysis:
@@ -444,6 +589,8 @@ jobs:
       - backend-core-tests
       - backend-security-tests
       - frontend-build
+      - frontend-e2e
+      - agentic-deterministic-evidence
       - static-analysis
       - postman-integration
       - container-security

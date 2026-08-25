@@ -36,8 +36,12 @@ class RouterAgent:
             text = re.sub(r"\s*```$", "", text)
             data = json.loads(text)
 
+            intent = data.get("intent", "book_qa")
+            if intent not in {"book_qa", "casual"}:
+                intent = "book_qa"
+
             return {
-                "intent": data.get("intent", "book_qa"),
+                "intent": intent,
                 "optimized_query": user_query,
             }
         except Exception as e:

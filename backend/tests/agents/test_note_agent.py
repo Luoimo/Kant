@@ -59,6 +59,24 @@ class TestProcessQA:
             # 确保 ReAct agent 被调用
             mock_executor.invoke.assert_called_once()
             
-    def test_calls_vector_store_when_provided(self):
-        # 此测试原用于测试向量库同步，由于向量库已被移除，此处可保留为占位或删除
-        pass
+    def test_updates_note_catalog_when_book_id_is_provided(self):
+        with (
+            patch('agents.note_agent.create_react_agent'),
+            patch('agents.note_agent.get_note_catalog') as mock_get_catalog,
+        ):
+            agent = NoteAgent(notes_dir=Path("."), llm=_make_llm())
+            agent._agent_executor = MagicMock()
+
+            agent.process_qa(
+                _FAKE_QUESTION,
+                _FAKE_ANSWER,
+                "纯粹理性批判",
+                book_id="book-1",
+                user_id="user-1",
+            )
+
+            mock_get_catalog.return_value.upsert.assert_called_once_with(
+                owner_user_id="user-1",
+                book_id="book-1",
+                file_path="纯粹理性批判.md",
+            )

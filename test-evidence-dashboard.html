@@ -175,11 +175,15 @@
       border-radius: 999px;
     }
 
-    .bar.rag { width: 78.95%; background: var(--blue); }
-    .bar.storage { width: 12.11%; background: var(--teal); }
-    .bar.api { width: 4.21%; background: var(--violet); }
-    .bar.agents { width: 2.63%; background: var(--amber); }
-    .bar.auth { width: 2.10%; background: var(--green); }
+    .bar.rag { width: 55.15%; background: var(--blue); }
+    .bar.storage { width: 10.66%; background: var(--teal); }
+    .bar.graph { width: 7.72%; background: #2e90fa; }
+    .bar.services { width: 6.62%; background: #12b76a; }
+    .bar.agentic { width: 7.72%; background: var(--amber); }
+    .bar.api { width: 5.51%; background: var(--violet); }
+    .bar.auth { width: 2.57%; background: var(--green); }
+    .bar.security { width: 2.21%; background: #d92d20; }
+    .bar.agents { width: 1.84%; background: #f79009; }
 
     .coverage {
       display: grid;
@@ -265,21 +269,21 @@
       </section>
       <aside class="stamp">
         <div class="stamp-row"><span>Test source</span><span>pytest JUnit XML</span></div>
-        <div class="stamp-row"><span>Timestamp</span><span>2026-05-20 14:07 UTC</span></div>
-        <div class="stamp-row"><span>Runner</span><span>runnervmg397c</span></div>
-        <div class="stamp-row"><span>Suite runtime</span><span>11.871s</span></div>
+        <div class="stamp-row"><span>Timestamp</span><span>2026-08-25 14:33 CST</span></div>
+        <div class="stamp-row"><span>Runner</span><span>CYJHX59G7X</span></div>
+        <div class="stamp-row"><span>Suite runtime</span><span>56.920s</span></div>
       </aside>
     </header>
 
     <section class="kpis" aria-label="Test result summary">
       <div class="kpi">
         <div class="label">Total Tests</div>
-        <div class="value">190</div>
+        <div class="value">272</div>
         <div class="note">Automated cases collected</div>
       </div>
       <div class="kpi pass">
         <div class="label">Passed</div>
-        <div class="value">190</div>
+        <div class="value">272</div>
         <div class="note">100% pass rate</div>
       </div>
       <div class="kpi fail">
@@ -311,26 +315,46 @@
           <div class="bar-row">
             <div class="bar-label">Storage</div>
             <div class="track"><div class="bar storage"></div></div>
-            <strong>23</strong>
+            <strong>29</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Graph</div>
+            <div class="track"><div class="bar graph"></div></div>
+            <strong>21</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Services</div>
+            <div class="track"><div class="bar services"></div></div>
+            <strong>18</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Agentic</div>
+            <div class="track"><div class="bar agentic"></div></div>
+            <strong>21</strong>
           </div>
           <div class="bar-row">
             <div class="bar-label">API</div>
             <div class="track"><div class="bar api"></div></div>
-            <strong>8</strong>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">Agents</div>
-            <div class="track"><div class="bar agents"></div></div>
-            <strong>5</strong>
+            <strong>15</strong>
           </div>
           <div class="bar-row">
             <div class="bar-label">Auth</div>
             <div class="track"><div class="bar auth"></div></div>
-            <strong>4</strong>
+            <strong>7</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Security</div>
+            <div class="track"><div class="bar security"></div></div>
+            <strong>6</strong>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Agent hooks</div>
+            <div class="track"><div class="bar agents"></div></div>
+            <strong>5</strong>
           </div>
         </div>
         <p class="caption">
-          Grouped by pytest classname prefixes: tests.rag, tests.storage, tests.api, tests.agents, and tests.auth.
+          Grouped by pytest classname prefixes. The Agentic group contains the new deterministic component and workflow tests.
         </p>
       </article>
 
@@ -365,17 +389,42 @@
       <article class="proof">
         <h3>CI-Ready Evidence</h3>
         <p>The JUnit XML can be uploaded by CI/CD systems and attached as a test artifact for reproducible grading.</p>
-        <div class="result-line">pytest tests: 190 passed, 0 failed</div>
+        <div class="result-line">pytest tests: 272 passed, 0 failed</div>
       </article>
       <article class="proof">
         <h3>System Confidence</h3>
         <p>The suite covers data ingestion, retrieval, AI orchestration, user-facing API behavior, and storage boundaries.</p>
-        <div class="result-line">runtime: 11.871s</div>
+        <div class="result-line">production coverage: 81.79% · runtime: 56.920s</div>
       </article>
       <article class="proof">
         <h3>Presentation Message</h3>
         <p>Evidence demonstrates that Kant's MVP behavior is tested across core backend, RAG, security, and persistence layers.</p>
-        <div class="result-line">status: green</div>
+        <div class="result-line">agent-focused checks: 32 passed</div>
+      </article>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Live Agentic AI Evaluation</h2>
+        <div class="coverage">
+          <div class="risk"><div class="risk-name">Live runs</div><div class="risk-evidence">19/19 met structural acceptance criteria.</div></div>
+          <div class="risk"><div class="risk-name">Routing</div><div class="risk-evidence">100% accuracy across five real-model routing cases.</div></div>
+          <div class="risk"><div class="risk-name">Tools &amp; citations</div><div class="risk-evidence">100% required-tool, argument, and citation-presence compliance.</div></div>
+          <div class="risk"><div class="risk-name">Repeatability</div><div class="risk-evidence">Three critical cases repeated three times with stable behavioural outcomes.</div></div>
+          <div class="risk"><div class="risk-name">Latency</div><div class="risk-evidence">15.224s average; 23.506s P95.</div></div>
+          <div class="risk"><div class="risk-name">Additional proof</div><div class="risk-evidence">Trajectory 5/5, Lakera 6/6, Promptfoo 11/11, Playwright 2/2, Memory isolation passed.</div></div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>Ragas Quality Evaluation</h2>
+        <div class="coverage">
+          <div class="risk"><div class="risk-name">Faithfulness</div><div class="risk-evidence">0.8125</div></div>
+          <div class="risk"><div class="risk-name">Answer relevancy</div><div class="risk-evidence">0.9123</div></div>
+          <div class="risk"><div class="risk-name">Context recall</div><div class="risk-evidence">0.9167</div></div>
+          <div class="risk"><div class="risk-name">Answer correctness</div><div class="risk-evidence">0.5776 — quality improvement required.</div></div>
+          <div class="risk"><div class="risk-name">Context precision</div><div class="risk-evidence">0.9160</div></div>
+        </div>
       </article>
     </section>
   </main>

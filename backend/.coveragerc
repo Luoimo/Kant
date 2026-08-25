@@ -1,0 +1,12 @@
+[run]
+omit =
+    tests/*
+    dist/*
+    build/*
+
+[report]
+show_missing = true
+omit =
+    tests/*
+    dist/*
+    build/*
